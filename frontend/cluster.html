@@ -1,0 +1,753 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Country Clustering</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body { background: #f8f9fa; }
+    .cluster-chip {
+      display: inline-block; padding: 2px 8px; border-radius: 12px;
+      font-size: 11px; margin: 2px; cursor: default; transition: opacity .15s;
+    }
+    .cluster-chip:hover { opacity: .75; }
+    .medoid-chip { font-weight: 700; border: 2px solid; }
+    .stat-box {
+      text-align: center; padding: 14px 8px;
+      background: white; border: 1px solid #dee2e6; border-radius: 8px;
+    }
+    .stat-value { font-size: 1.4rem; font-weight: 700; color: #212529; }
+    .stat-label { font-size: .7rem; color: #6c757d; text-transform: uppercase; letter-spacing: .05em; margin-top: 2px; }
+    #loading {
+      position: fixed; inset: 0; background: white;
+      display: flex; align-items: center; justify-content: center; z-index: 1000;
+    }
+    #viz-area svg { display: block; }
+    .algo-badge { font-size: .7rem; padding: 2px 8px; border-radius: 10px; }
+  </style>
+</head>
+<body>
+
+<nav class="navbar navbar-expand-lg navbar-light bg-white border-bottom shadow-sm">
+  <div class="container">
+    <a class="navbar-brand fw-bold text-primary" href="./index.html">Country Visualizer</a>
+    <div class="navbar-nav ms-auto">
+      <a class="nav-link" href="./index.html">Home</a>
+      <a class="nav-link" href="./app.html">Explorer</a>
+      <a class="nav-link active fw-semibold" href="./cluster.html">Clustering</a>
+    </div>
+  </div>
+</nav>
+
+<!-- Loading spinner -->
+<div id="loading">
+  <div class="text-center">
+    <div class="spinner-border text-primary mb-3" style="width:3rem;height:3rem;"></div>
+    <div class="fw-semibold" id="loading-msg">Loading similarity matrix…</div>
+    <div class="text-muted small mt-1">194 × 194 precomputed TED similarities</div>
+  </div>
+</div>
+
+<!-- App -->
+<div id="app" class="container-fluid py-4 d-none">
+  <div class="container-xl">
+
+    <div class="mb-4">
+      <h2 class="fw-bold mb-1">Wikipedia Country Clustering</h2>
+      <p class="text-muted mb-0">Groups 194 countries by structural similarity of their Wikipedia infoboxes using Tree Edit Distance (TED).</p>
+    </div>
+
+    <!-- Controls card -->
+    <div class="card shadow-sm mb-4">
+      <div class="card-body">
+        <div class="row g-3 align-items-end">
+
+          <!-- Algorithm -->
+          <div class="col-auto">
+            <label class="form-label fw-semibold mb-1 d-block">Algorithm</label>
+            <div class="btn-group" role="group">
+              <input type="radio" class="btn-check" name="algo" id="algo-km" value="kmedoids" checked>
+              <label class="btn btn-outline-primary" for="algo-km">K-Medoids (PAM)</label>
+              <input type="radio" class="btn-check" name="algo" id="algo-hac" value="hac">
+              <label class="btn btn-outline-primary" for="algo-hac">Hierarchical (HAC)</label>
+            </div>
+          </div>
+
+          <!-- k -->
+          <div class="col-auto" style="min-width:180px;">
+            <label class="form-label fw-semibold mb-1">
+              Clusters &nbsp;<span class="badge bg-primary" id="k-badge">5</span>
+            </label>
+            <input type="range" class="form-range" id="k-slider" min="2" max="10" value="5">
+          </div>
+
+          <!-- K-Medoids params -->
+          <div id="km-params" class="col-auto">
+            <label class="form-label fw-semibold mb-1">Random Seed</label>
+            <input type="number" class="form-control form-control-sm" id="km-seed" value="42" min="0" style="width:90px;">
+          </div>
+
+          <!-- HAC params -->
+          <div id="hac-params" class="col-auto d-none">
+            <label class="form-label fw-semibold mb-1">Linkage</label>
+            <select class="form-select form-select-sm" id="hac-linkage" style="width:150px;">
+              <option value="average" selected>Average (UPGMA)</option>
+              <option value="complete">Complete</option>
+              <option value="single">Single</option>
+            </select>
+          </div>
+
+          <!-- Run button -->
+          <div class="col-auto">
+            <button class="btn btn-primary px-4" id="run-btn">
+              <span id="run-spinner" class="spinner-border spinner-border-sm me-1 d-none"></span>
+              Run
+            </button>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- Stats row -->
+    <div class="row g-3 mb-4 d-none" id="stats-row">
+      <div class="col-6 col-sm-3">
+        <div class="stat-box">
+          <div class="stat-value text-primary" id="stat-k">-</div>
+          <div class="stat-label">Clusters</div>
+        </div>
+      </div>
+      <div class="col-6 col-sm-3">
+        <div class="stat-box">
+          <div class="stat-value text-success" id="stat-sil">-</div>
+          <div class="stat-label">Silhouette Score <small class="text-muted">(higher better)</small></div>
+        </div>
+      </div>
+      <div class="col-6 col-sm-3">
+        <div class="stat-box">
+          <div class="stat-value text-warning" id="stat-db">-</div>
+          <div class="stat-label">Davies-Bouldin <small class="text-muted">(lower better)</small></div>
+        </div>
+      </div>
+      <div class="col-6 col-sm-3">
+        <div class="stat-box">
+          <div class="stat-value text-secondary" id="stat-extra">-</div>
+          <div class="stat-label" id="stat-extra-label">Cost</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Results -->
+    <div class="row g-4 d-none" id="results-row">
+
+      <!-- Visualization -->
+      <div class="col-xl-7">
+        <div class="card shadow-sm h-100">
+          <div class="card-header d-flex align-items-center justify-content-between">
+            <span class="fw-semibold" id="viz-title">Visualization</span>
+            <span class="text-muted small" id="viz-subtitle"></span>
+          </div>
+          <div class="card-body p-2" id="viz-area"></div>
+        </div>
+      </div>
+
+      <!-- Cluster list -->
+      <div class="col-xl-5">
+        <div class="card shadow-sm h-100">
+          <div class="card-header fw-semibold">Cluster Members</div>
+          <div class="card-body p-3" style="overflow-y:auto;max-height:640px;" id="cluster-cards"></div>
+        </div>
+      </div>
+
+    </div><!-- /results-row -->
+
+    <!-- Elbow analysis -->
+    <div class="card shadow-sm mt-4 d-none" id="elbow-card">
+      <div class="card-header d-flex align-items-center justify-content-between">
+        <span class="fw-semibold">Elbow Analysis &mdash; k = 2 &hellip; 10</span>
+        <button class="btn btn-outline-secondary btn-sm" id="elbow-btn">
+          <span id="elbow-spinner" class="spinner-border spinner-border-sm me-1 d-none"></span>
+          Run Analysis
+        </button>
+      </div>
+      <div class="card-body">
+        <p class="text-muted small mb-3">Compares K-Medoids and HAC (average linkage) across all values of k. Use these charts to pick the best k for your use case.</p>
+        <div class="row g-3" id="elbow-charts" style="display:none!important">
+          <div class="col-md-6"><div id="elbow-sil"></div></div>
+          <div class="col-md-6"><div id="elbow-db"></div></div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /container-xl -->
+</div><!-- /app -->
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+<script>
+"use strict";
+
+// ─── State ───────────────────────────────────────────────────────────────────
+let COUNTRIES = [], MATRIX = [], N = 0;
+let mdsCoords = null;   // cached MDS projection
+let hacCache  = {};     // linkage -> {merges, n}
+
+const PALETTE = [
+  ...d3.schemeTableau10,
+  "#e377c2","#17becf","#bcbd22","#9467bd","#8c564b"
+];
+const col   = i => PALETTE[i % PALETTE.length];
+const dname = i => COUNTRIES[i].replace(/_/g, ' ');
+
+// ─── Load data ────────────────────────────────────────────────────────────────
+async function loadData() {
+  const resp = await fetch('../data/similarity_matrix.json');
+  const data = await resp.json();
+  COUNTRIES = data.countries;
+  MATRIX    = data.matrix;
+  N         = COUNTRIES.length;
+
+  document.getElementById('loading-msg').textContent = 'Computing MDS projection…';
+  await tick();
+  mdsCoords = classicalMDS();
+
+  document.getElementById('loading-msg').textContent = 'Precomputing HAC (average)…';
+  await tick();
+  computeHAC('average');   // warm cache for default setting
+
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('app').classList.remove('d-none');
+  run();
+}
+
+// Yield to the browser so the loading message updates
+function tick() {
+  return new Promise(r => setTimeout(r, 0));
+}
+
+// ─── Distance helper ──────────────────────────────────────────────────────────
+function dist(i, j) { return 1 - MATRIX[i][j]; }
+
+// ─── K-Medoids (PAM) ─────────────────────────────────────────────────────────
+function kmedoids(k, seed, maxIter = 100) {
+  // Seeded PRNG (mulberry32)
+  let s = (seed >>> 0) + 1;
+  const rand = () => { s |= 0; s = s + 0x6D2B79F5 | 0; let t = Math.imul(s ^ s >>> 15, 1 | s); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+
+  // Pick k initial medoids by sampling without replacement
+  const pool = Array.from({length: N}, (_, i) => i);
+  for (let i = N - 1; i > 0; i--) { const j = Math.floor(rand() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
+  let medoids = pool.slice(0, k);
+
+  const assign = (meds) => Array.from({length: N}, (_, i) => {
+    let best = 0, bd = Infinity;
+    for (let m = 0; m < k; m++) { const d = dist(i, meds[m]); if (d < bd) { bd = d; best = m; } }
+    return best;
+  });
+
+  const totalCost = (meds, asgn) => asgn.reduce((s, m, i) => s + dist(i, meds[m]), 0);
+
+  let asgn = assign(medoids);
+  let cost = totalCost(medoids, asgn);
+  let iterations = 0;
+  const medSet = new Set(medoids);
+
+  for (let iter = 0; iter < maxIter; iter++) {
+    iterations++;
+    let improved = false;
+    outer: for (let m = 0; m < k; m++) {
+      for (let c = 0; c < N; c++) {
+        if (medSet.has(c)) continue;
+        const nm = medoids.map((v, i) => i === m ? c : v);
+        const na = assign(nm);
+        const nc = totalCost(nm, na);
+        if (nc < cost - 1e-9) {
+          medoids = nm; asgn = na; cost = nc;
+          medSet.clear(); medoids.forEach(x => medSet.add(x));
+          improved = true; break outer;
+        }
+      }
+    }
+    if (!improved) break;
+  }
+
+  const clusters = Array.from({length: k}, () => []);
+  asgn.forEach((m, i) => clusters[m].push(i));
+  return { medoids, assignments: asgn, clusters, cost, iterations };
+}
+
+// ─── HAC (Lance-Williams) ─────────────────────────────────────────────────────
+function computeHAC(linkage) {
+  if (hacCache[linkage]) return hacCache[linkage];
+
+  const MAX = 2 * N;
+  const d   = new Float32Array(MAX * MAX);
+  for (let i = 0; i < N; i++)
+    for (let j = 0; j < N; j++)
+      d[i * MAX + j] = 1 - MATRIX[i][j];
+
+  const sizes  = new Int32Array(MAX);
+  for (let i = 0; i < N; i++) sizes[i] = 1;
+
+  const active = new Set(Array.from({length: N}, (_, i) => i));
+  const merges = [];
+  let nextId = N;
+
+  for (let step = 0; step < N - 1; step++) {
+    const arr = [...active];
+    let minD = Infinity, bestA = -1, bestB = -1;
+    for (let i = 0; i < arr.length; i++)
+      for (let j = i + 1; j < arr.length; j++) {
+        const dd = d[arr[i] * MAX + arr[j]];
+        if (dd < minD) { minD = dd; bestA = arr[i]; bestB = arr[j]; }
+      }
+
+    const id = nextId++, sA = sizes[bestA], sB = sizes[bestB];
+    sizes[id] = sA + sB;
+
+    for (const c of active) {
+      if (c === bestA || c === bestB) continue;
+      const dAC = d[bestA * MAX + c], dBC = d[bestB * MAX + c];
+      let nd;
+      if      (linkage === 'single')   nd = Math.min(dAC, dBC);
+      else if (linkage === 'complete') nd = Math.max(dAC, dBC);
+      else                             nd = (sA * dAC + sB * dBC) / (sA + sB);
+      d[id * MAX + c] = d[c * MAX + id] = nd;
+    }
+
+    merges.push({ step, cluster_a: bestA, cluster_b: bestB, new_id: id, distance: minD, size: sA + sB });
+    active.delete(bestA); active.delete(bestB); active.add(id);
+  }
+
+  hacCache[linkage] = { merges, n: N };
+  return hacCache[linkage];
+}
+
+function hacCut(result, k) {
+  const { merges, n } = result;
+  const stop = n - k;
+  const members = Object.fromEntries(Array.from({length: n}, (_, i) => [i, [i]]));
+  const active  = new Set(Array.from({length: n}, (_, i) => i));
+  let cutDist = 0;
+
+  for (let i = 0; i < stop; i++) {
+    const m = merges[i];
+    members[m.new_id] = [...members[m.cluster_a], ...members[m.cluster_b]];
+    active.delete(m.cluster_a); active.delete(m.cluster_b); active.add(m.new_id);
+    cutDist = m.distance;
+  }
+
+  const asgn = new Array(n).fill(0);
+  const clusters = [];
+  [...active].sort((a, b) => a - b).forEach((cid, ci) => {
+    clusters.push(members[cid]);
+    members[cid].forEach(i => asgn[i] = ci);
+  });
+  return { assignments: asgn, clusters, cutDistance: cutDist };
+}
+
+// ─── Evaluation ───────────────────────────────────────────────────────────────
+function silhouette(asgn) {
+  const k = Math.max(...asgn) + 1;
+  const clusters = Array.from({length: k}, () => []);
+  asgn.forEach((c, i) => clusters[c].push(i));
+  let total = 0;
+  for (let i = 0; i < N; i++) {
+    const ci = asgn[i], same = clusters[ci].filter(j => j !== i);
+    if (!same.length) continue;
+    const a = same.reduce((s, j) => s + dist(i, j), 0) / same.length;
+    let b = Infinity;
+    for (let c = 0; c < k; c++) {
+      if (c === ci || !clusters[c].length) continue;
+      const avg = clusters[c].reduce((s, j) => s + dist(i, j), 0) / clusters[c].length;
+      if (avg < b) b = avg;
+    }
+    const denom = Math.max(a, b);
+    total += denom > 0 ? (b - a) / denom : 0;
+  }
+  return total / N;
+}
+
+function daviesBouldin(asgn) {
+  const k = Math.max(...asgn) + 1;
+  const clusters = Array.from({length: k}, () => []);
+  asgn.forEach((c, i) => clusters[c].push(i));
+
+  const medoids = clusters.map(members => {
+    if (members.length === 1) return members[0];
+    let best = members[0], bestSum = Infinity;
+    for (const p of members) {
+      const s = members.reduce((sum, q) => sum + (p !== q ? dist(p, q) : 0), 0);
+      if (s < bestSum) { bestSum = s; best = p; }
+    }
+    return best;
+  });
+
+  const scatter = clusters.map((members, c) => {
+    if (members.length <= 1) return 0;
+    const m = medoids[c];
+    return members.filter(j => j !== m).reduce((s, j) => s + dist(m, j), 0) / (members.length - 1);
+  });
+
+  let db = 0;
+  for (let i = 0; i < k; i++) {
+    let maxR = 0;
+    for (let j = 0; j < k; j++) {
+      if (i === j) continue;
+      const inter = dist(medoids[i], medoids[j]);
+      if (inter === 0) continue;
+      maxR = Math.max(maxR, (scatter[i] + scatter[j]) / inter);
+    }
+    db += maxR;
+  }
+  return db / k;
+}
+
+// ─── Classical MDS ────────────────────────────────────────────────────────────
+function classicalMDS() {
+  // Squared distance matrix
+  const D2 = Array.from({length: N}, (_, i) => Array.from({length: N}, (_, j) => dist(i,j) ** 2));
+
+  const rowMeans  = D2.map(row => row.reduce((s, x) => s + x, 0) / N);
+  const colMeans  = Array.from({length: N}, (_, j) => D2.reduce((s, row) => s + row[j], 0) / N);
+  const totalMean = rowMeans.reduce((s, x) => s + x, 0) / N;
+
+  // Double-center -> B matrix
+  const B = D2.map((row, i) => row.map((v, j) => -0.5 * (v - rowMeans[i] - colMeans[j] + totalMean)));
+
+  const matVec = (M, v) => M.map(row => row.reduce((s, m, j) => s + m * v[j], 0));
+  const norm   = v => { const n = Math.sqrt(v.reduce((s, x) => s + x*x, 0)); return n > 0 ? v.map(x => x/n) : v; };
+
+  function powerIter(M, iters = 300) {
+    // deterministic start: use row sums
+    let v = norm(M.map(row => row.reduce((s, x) => s + x, 0)));
+    for (let i = 0; i < iters; i++) v = norm(matVec(M, v));
+    const Bv  = matVec(M, v);
+    const lam = v.reduce((s, vi, i) => s + vi * Bv[i], 0);
+    return { v, lam };
+  }
+
+  // First eigenvector
+  const { v: v1, lam: l1 } = powerIter(B);
+  // Deflate
+  const B2 = B.map((row, i) => row.map((b, j) => b - l1 * v1[i] * v1[j]));
+  const { v: v2, lam: l2 } = powerIter(B2);
+
+  return {
+    x: v1.map(vi => vi * Math.sqrt(Math.max(0, l1))),
+    y: v2.map(vi => vi * Math.sqrt(Math.max(0, l2)))
+  };
+}
+
+// ─── Render: MDS scatter plot ─────────────────────────────────────────────────
+function renderScatter(asgn, medoids) {
+  const W = document.getElementById('viz-area').clientWidth || 680;
+  const H = 540, mg = {top:15, right:15, bottom:30, left:30};
+  const iw = W - mg.left - mg.right, ih = H - mg.top - mg.bottom;
+  const { x, y } = mdsCoords;
+
+  document.getElementById('viz-area').innerHTML = '';
+  const svg = d3.select('#viz-area').append('svg').attr('width', W).attr('height', H);
+  const g   = svg.append('g').attr('transform', `translate(${mg.left},${mg.top})`);
+
+  const xs = d3.scaleLinear().domain(d3.extent(x)).range([0, iw]).nice();
+  const ys = d3.scaleLinear().domain(d3.extent(y)).range([ih, 0]).nice();
+
+  // Axis labels
+  g.append('g').attr('transform', `translate(0,${ih})`).call(d3.axisBottom(xs).ticks(5).tickFormat(() => ''))
+    .call(g => g.select('.domain').attr('stroke', '#ccc'));
+  g.append('g').call(d3.axisLeft(ys).ticks(5).tickFormat(() => ''))
+    .call(g => g.select('.domain').attr('stroke', '#ccc'));
+
+  const tooltip = d3.select('body').selectAll('#scat-tip').data([1]).join('div')
+    .attr('id','scat-tip')
+    .style('position','fixed').style('background','white').style('border','1px solid #ccc')
+    .style('padding','6px 10px').style('border-radius','6px').style('font-size','12px')
+    .style('pointer-events','none').style('display','none').style('z-index','999').style('box-shadow','0 2px 8px rgba(0,0,0,.15)');
+
+  const isMed = new Set(medoids);
+
+  g.selectAll('circle').data(d3.range(N)).join('circle')
+    .attr('cx', i => xs(x[i])).attr('cy', i => ys(y[i]))
+    .attr('r',  i => isMed.has(i) ? 9 : 4.5)
+    .attr('fill',   i => col(asgn[i]))
+    .attr('stroke', i => isMed.has(i) ? '#222' : 'white')
+    .attr('stroke-width', i => isMed.has(i) ? 2 : 0.8)
+    .attr('opacity', 0.88)
+    .on('mouseover', (ev, i) => tooltip.style('display','block')
+      .html(`<strong>${dname(i)}</strong><br>Cluster ${asgn[i]+1}${isMed.has(i) ? ' <em>(medoid)</em>' : ''}`))
+    .on('mousemove', ev => tooltip.style('left',(ev.clientX+14)+'px').style('top',(ev.clientY-10)+'px'))
+    .on('mouseout',  ()  => tooltip.style('display','none'));
+}
+
+// ─── Render: dendrogram ───────────────────────────────────────────────────────
+function renderDendrogram(hacResult, cut) {
+  const { merges } = hacResult;
+  const { assignments: asgn, clusters, cutDistance } = cut;
+
+  // Leaf order: group by cluster for visual clarity
+  const leafOrder = [];
+  for (const cl of clusters) for (const idx of cl) leafOrder.push(idx);
+  const posOf = new Array(N);
+  leafOrder.forEach((idx, p) => posOf[idx] = p);
+
+  // y positions: leaves by posOf, internals by average of children
+  const nodeY = new Array(2 * N).fill(0);
+  for (let i = 0; i < N; i++) nodeY[i] = posOf[i];
+  merges.forEach(m => { nodeY[m.new_id] = (nodeY[m.cluster_a] + nodeY[m.cluster_b]) / 2; });
+
+  // x = merge distance; leaves at 0
+  const nodeX = new Array(2 * N).fill(0);
+  merges.forEach(m => { nodeX[m.new_id] = m.distance; });
+
+  // Cluster color for each node (−1 if mixed)
+  const nodeClr = new Array(2 * N).fill(-1);
+  for (let i = 0; i < N; i++) nodeClr[i] = asgn[i];
+  merges.forEach(m => {
+    const ca = nodeClr[m.cluster_a], cb = nodeClr[m.cluster_b];
+    nodeClr[m.new_id] = (ca !== -1 && ca === cb) ? ca : -1;
+  });
+
+  const leafH = 11, mg = {top:22, right:165, bottom:10, left:50};
+  const W = 900, w = W - mg.left - mg.right, H = N * leafH;
+  const maxD = merges[merges.length - 1]?.distance || 1;
+  const xS = d3.scaleLinear().domain([0, maxD]).range([w, 0]); // leaves right
+  const yS = d3.scaleLinear().domain([0, N - 1]).range([0, H]);
+
+  document.getElementById('viz-area').innerHTML =
+    '<div id="dend-scroll" style="overflow-y:auto;max-height:590px;"></div>';
+  const svg = d3.select('#dend-scroll').append('svg')
+    .attr('width', W).attr('height', H + mg.top + mg.bottom);
+  const g = svg.append('g').attr('transform', `translate(${mg.left},${mg.top})`);
+
+  // Draw merge elbows
+  merges.forEach(m => {
+    const xP  = xS(m.distance);
+    const yA  = yS(nodeY[m.cluster_a]), yB = yS(nodeY[m.cluster_b]);
+    const xA  = xS(nodeX[m.cluster_a]), xB = xS(nodeX[m.cluster_b]);
+    const clr = nodeClr[m.new_id] >= 0 ? col(nodeClr[m.new_id]) : '#ccc';
+    const w1  = nodeClr[m.new_id] >= 0 ? 1.4 : 1.0;
+
+    g.append('line').attr('x1',xA).attr('y1',yA).attr('x2',xP).attr('y2',yA).attr('stroke',clr).attr('stroke-width',w1);
+    g.append('line').attr('x1',xB).attr('y1',yB).attr('x2',xP).attr('y2',yB).attr('stroke',clr).attr('stroke-width',w1);
+    g.append('line').attr('x1',xP).attr('y1',yA).attr('x2',xP).attr('y2',yB).attr('stroke',clr).attr('stroke-width',w1);
+  });
+
+  // Cut line — placed midway between last included and first excluded merge
+  if (cutDistance > 0) {
+    const stop = N - clusters.length;
+    const nextDist = stop < merges.length ? merges[stop].distance : maxD;
+    const lineDist = (cutDistance + nextDist) / 2;
+    const xC = xS(lineDist);
+    g.append('line').attr('x1',xC).attr('y1',0).attr('x2',xC).attr('y2',H)
+      .attr('stroke','#e74c3c').attr('stroke-dasharray','5,3').attr('stroke-width',1.5);
+    g.append('text').attr('x',xC+3).attr('y',12).attr('fill','#e74c3c')
+      .attr('font-size','9px').text(`k=${clusters.length} cut`);
+  }
+
+  // Country name labels
+  leafOrder.forEach((idx, p) => {
+    g.append('text').attr('x', w + 6).attr('y', yS(p) + 3.5)
+      .attr('fill', col(asgn[idx])).attr('font-size','9px').attr('dominant-baseline','middle')
+      .text(dname(idx));
+  });
+
+  // Distance axis
+  g.append('g').call(d3.axisTop(xS).ticks(6).tickFormat(d3.format('.2f')))
+    .call(a => a.select('.domain').attr('stroke','#aaa'))
+    .call(a => a.selectAll('text').attr('font-size','8px'));
+  g.append('text').attr('x', w/2).attr('y', -14)
+    .attr('text-anchor','middle').attr('font-size','9px').attr('fill','#666').text('Distance (1 − similarity)');
+}
+
+// ─── Render: cluster cards ────────────────────────────────────────────────────
+function renderClusters(asgn, clusters, medoids) {
+  const medSet = new Set(medoids || []);
+  document.getElementById('cluster-cards').innerHTML = clusters.map((members, ci) => {
+    const c = col(ci);
+    const medoid = medoids ? dname(medoids[ci]) : null;
+    const chips  = members.map(idx => {
+      const med = medSet.has(idx);
+      return `<span class="cluster-chip${med?' medoid-chip':''}"
+        style="background:${c}22;color:${c};${med?`border-color:${c};`:''}">
+        ${dname(idx)}${med?' ★':''}
+      </span>`;
+    }).join('');
+    return `
+      <div class="mb-3 pb-3 border-bottom">
+        <div class="d-flex align-items-center gap-2 mb-1">
+          <span style="width:10px;height:10px;border-radius:50%;background:${c};display:inline-block;flex-shrink:0;"></span>
+          <strong style="color:${c}">Cluster ${ci + 1}</strong>
+          <span class="text-muted" style="font-size:11px;">${members.length} countries</span>
+          ${medoid ? `<span class="badge" style="background:${c}22;color:${c};border:1px solid ${c}44;font-size:10px;font-weight:600;">medoid: ${medoid}</span>` : ''}
+        </div>
+        <div>${chips}</div>
+      </div>`;
+  }).join('');
+}
+
+// ─── Main run ─────────────────────────────────────────────────────────────────
+async function run() {
+  const btn = document.getElementById('run-btn');
+  const sp  = document.getElementById('run-spinner');
+  btn.disabled = true; sp.classList.remove('d-none');
+  await tick();
+
+  const algo = document.querySelector('input[name="algo"]:checked').value;
+  const k    = +document.getElementById('k-slider').value;
+
+  let asgn, clusters, medoids = null, extraVal, extraLabel;
+
+  if (algo === 'kmedoids') {
+    const seed = +document.getElementById('km-seed').value || 42;
+    const res  = kmedoids(k, seed);
+    asgn = res.assignments; clusters = res.clusters; medoids = res.medoids;
+    extraVal   = res.cost.toFixed(2); extraLabel = 'Total Cost';
+    document.getElementById('viz-title').textContent    = 'MDS Projection';
+    document.getElementById('viz-subtitle').textContent = 'Each dot = one country. Medoids are larger with dark border.';
+    renderScatter(asgn, medoids);
+  } else {
+    const linkage  = document.getElementById('hac-linkage').value;
+    if (!hacCache[linkage]) {
+      document.getElementById('loading-msg').textContent = `Computing HAC (${linkage})…`;
+      document.getElementById('loading').style.display = 'flex';
+      await tick();
+      computeHAC(linkage);
+      document.getElementById('loading').style.display = 'none';
+    }
+    const hacRes = hacCache[linkage];
+    const cut    = hacCut(hacRes, k);
+    asgn = cut.assignments; clusters = cut.clusters;
+    extraVal   = cut.cutDistance.toFixed(4); extraLabel = 'Cut Distance';
+    document.getElementById('viz-title').textContent    = `Dendrogram (${linkage} linkage)`;
+    document.getElementById('viz-subtitle').textContent = 'Leaves colored by cluster. Red dashed line = cut.';
+    renderDendrogram(hacRes, cut);
+  }
+
+  // Evaluation
+  const sil = silhouette(asgn);
+  const db  = daviesBouldin(asgn);
+
+  document.getElementById('stat-k').textContent          = k;
+  document.getElementById('stat-sil').textContent        = sil.toFixed(4);
+  document.getElementById('stat-db').textContent         = db.toFixed(4);
+  document.getElementById('stat-extra').textContent      = extraVal;
+  document.getElementById('stat-extra-label').textContent = extraLabel;
+
+  document.getElementById('stats-row').classList.remove('d-none');
+  document.getElementById('results-row').classList.remove('d-none');
+  document.getElementById('elbow-card').classList.remove('d-none');
+
+  renderClusters(asgn, clusters, medoids);
+
+  btn.disabled = false; sp.classList.add('d-none');
+}
+
+// ─── Elbow analysis ──────────────────────────────────────────────────────────
+async function runElbow() {
+  const btn = document.getElementById('elbow-btn');
+  const sp  = document.getElementById('elbow-spinner');
+  btn.disabled = true; sp.classList.remove('d-none');
+  await tick();
+
+  const ks = d3.range(2, 11);
+  const kmSil = [], kmDB = [], hacSil = [], hacDB = [];
+
+  const hacRes = computeHAC('average');
+
+  for (const k of ks) {
+    const km  = kmedoids(k, 42);
+    kmSil.push(silhouette(km.assignments));
+    kmDB.push(daviesBouldin(km.assignments));
+
+    const cut = hacCut(hacRes, k);
+    hacSil.push(silhouette(cut.assignments));
+    hacDB.push(daviesBouldin(cut.assignments));
+    await tick();
+  }
+
+  const series = [
+    { label: 'K-Medoids', sil: kmSil,  db: kmDB,  color: '#4e79a7' },
+    { label: 'HAC (avg)', sil: hacSil, db: hacDB, color: '#f28e2b' },
+  ];
+
+  renderElbowChart('#elbow-sil', ks, series.map(s => ({label:s.label, values:s.sil, color:s.color})),
+    'Silhouette Score  (higher = better)');
+  renderElbowChart('#elbow-db',  ks, series.map(s => ({label:s.label, values:s.db,  color:s.color})),
+    'Davies-Bouldin Index  (lower = better)');
+
+  document.getElementById('elbow-charts').style.removeProperty('display');
+  btn.disabled = false; sp.classList.add('d-none');
+}
+
+function renderElbowChart(selector, ks, series, title) {
+  const el = document.querySelector(selector);
+  const W  = el.clientWidth || 420;
+  const H  = 260, mg = { top: 36, right: 20, bottom: 38, left: 48 };
+  const iw = W - mg.left - mg.right, ih = H - mg.top - mg.bottom;
+
+  d3.select(selector).html('');
+  const svg = d3.select(selector).append('svg').attr('width', W).attr('height', H);
+  const g   = svg.append('g').attr('transform', `translate(${mg.left},${mg.top})`);
+
+  const xS = d3.scalePoint().domain(ks.map(String)).range([0, iw]).padding(0.3);
+  const allVals = series.flatMap(s => s.values);
+  const yS = d3.scaleLinear().domain([
+    Math.min(...allVals) * (Math.min(...allVals) >= 0 ? 0.85 : 1.1),
+    Math.max(...allVals) * 1.1
+  ]).range([ih, 0]).nice();
+
+  // Grid
+  g.append('g').call(d3.axisLeft(yS).ticks(5).tickSize(-iw))
+    .call(a => { a.selectAll('.tick line').attr('stroke','#f0f0f0'); a.select('.domain').remove(); });
+
+  // Axes
+  g.append('g').attr('transform',`translate(0,${ih})`).call(d3.axisBottom(xS).tickFormat(d => 'k='+d))
+    .call(a => a.selectAll('text').attr('font-size','10px'));
+  g.append('g').call(d3.axisLeft(yS).ticks(5).tickFormat(d3.format('.3f')))
+    .call(a => a.selectAll('text').attr('font-size','10px'));
+
+  // Title
+  g.append('text').attr('x', iw/2).attr('y', -18)
+    .attr('text-anchor','middle').attr('font-size','11px').attr('font-weight','600').text(title);
+
+  const line = d3.line().x((_,i) => xS(String(ks[i]))).y(v => yS(v)).curve(d3.curveMonotoneX);
+
+  series.forEach(({label, values, color}, si) => {
+    g.append('path').datum(values).attr('d', line(values))
+      .attr('fill','none').attr('stroke', color).attr('stroke-width', 2.2);
+
+    g.selectAll(null).data(values).join('circle')
+      .attr('cx', (_,i) => xS(String(ks[i]))).attr('cy', v => yS(v))
+      .attr('r', 4.5).attr('fill', color).attr('stroke','white').attr('stroke-width',1.5);
+
+    // Legend entry
+    const lx = si === 0 ? 8 : iw - 90;
+    g.append('line').attr('x1',lx).attr('y1',-6).attr('x2',lx+18).attr('y2',-6)
+      .attr('stroke',color).attr('stroke-width',2.2);
+    g.append('circle').attr('cx',lx+9).attr('cy',-6).attr('r',4).attr('fill',color);
+    g.append('text').attr('x',lx+22).attr('y',-2).attr('font-size','10px').attr('fill','#444').text(label);
+  });
+}
+
+// ─── UI wiring ────────────────────────────────────────────────────────────────
+document.getElementById('k-slider').addEventListener('input', function () {
+  document.getElementById('k-badge').textContent = this.value;
+});
+
+document.querySelectorAll('input[name="algo"]').forEach(r =>
+  r.addEventListener('change', function () {
+    document.getElementById('km-params').classList.toggle('d-none',  this.value !== 'kmedoids');
+    document.getElementById('hac-params').classList.toggle('d-none', this.value !== 'hac');
+  })
+);
+
+document.getElementById('run-btn').addEventListener('click', run);
+document.getElementById('elbow-btn').addEventListener('click', runElbow);
+
+// ─── Boot ─────────────────────────────────────────────────────────────────────
+loadData();
+</script>
+</body>
+</html>
