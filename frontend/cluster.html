@@ -74,8 +74,8 @@
             </div>
           </div>
 
-          <!-- k -->
-          <div class="col-auto" style="min-width:180px;">
+          <!-- k (K-Medoids only) -->
+          <div id="km-k-params" class="col-auto" style="min-width:180px;">
             <label class="form-label fw-semibold mb-1">
               Clusters &nbsp;<span class="badge bg-primary" id="k-badge">5</span>
             </label>
@@ -91,11 +91,21 @@
           <!-- HAC params -->
           <div id="hac-params" class="col-auto d-none">
             <label class="form-label fw-semibold mb-1">Linkage</label>
-            <select class="form-select form-select-sm" id="hac-linkage" style="width:150px;">
-              <option value="average" selected>Average (UPGMA)</option>
+            <select class="form-select form-select-sm" id="hac-linkage" style="width:160px;">
+              <option value="ward" selected>Ward's</option>
               <option value="complete">Complete</option>
+              <option value="average">Average (UPGMA)</option>
               <option value="single">Single</option>
             </select>
+          </div>
+
+          <!-- HAC cut distance (replaces k for HAC) -->
+          <div id="hac-cut-params" class="col-auto d-none" style="min-width:220px;">
+            <label class="form-label fw-semibold mb-1 d-flex align-items-center gap-2">
+              Cut distance &nbsp;<span class="badge bg-primary" id="cut-badge">-</span>
+              <span class="badge bg-secondary" id="cut-k-badge">- clusters</span>
+            </label>
+            <input type="range" class="form-range" id="cut-slider" min="0" max="1" step="0.001" value="0.5">
           </div>
 
           <!-- Run button -->
@@ -107,6 +117,48 @@
           </div>
 
         </div>
+
+        <!-- Feature selection -->
+        <hr class="mt-3 mb-2">
+        <div class="row g-2">
+          <div class="col-12">
+            <label class="form-label fw-semibold mb-1">Similarity Basis</label>
+            <div class="d-flex gap-4">
+              <div class="form-check">
+                <input class="form-check-input" type="radio" name="feat-mode" id="feat-all" value="all" checked>
+                <label class="form-check-label" for="feat-all">
+                  Full tree <span class="text-muted small">(precomputed matrix)</span>
+                </label>
+              </div>
+              <div class="form-check">
+                <input class="form-check-input" type="radio" name="feat-mode" id="feat-sel" value="selected">
+                <label class="form-check-label" for="feat-sel">
+                  Selected features <span class="text-muted small">(recomputed on demand)</span>
+                </label>
+              </div>
+            </div>
+          </div>
+          <div id="feat-picker" class="col-12 d-none">
+            <div id="feat-checks" class="d-flex flex-wrap gap-1 p-2 mb-2"
+                 style="max-height:140px;overflow-y:auto;border:1px solid #dee2e6;border-radius:6px;background:#fff;"></div>
+            <div class="d-flex flex-wrap align-items-center gap-2">
+              <button type="button" class="btn btn-outline-secondary btn-sm" id="feat-all-btn">Select All</button>
+              <button type="button" class="btn btn-outline-secondary btn-sm" id="feat-none-btn">Clear</button>
+              <span class="text-muted small" id="feat-summary"></span>
+              <button type="button" class="btn btn-success btn-sm ms-auto" id="feat-compute-btn" disabled>
+                <span id="feat-spinner" class="spinner-border spinner-border-sm me-1 d-none"></span>
+                <span id="feat-compute-text">Compute Matrix</span>
+              </button>
+            </div>
+            <div id="feat-progress" class="mt-2 d-none">
+              <div class="progress mb-1" style="height:5px;">
+                <div class="progress-bar bg-success" id="feat-progress-bar" style="width:0%;"></div>
+              </div>
+              <span class="text-muted" style="font-size:11px;" id="feat-progress-text"></span>
+            </div>
+          </div>
+        </div>
+
       </div>
     </div>
 
@@ -190,8 +242,14 @@
 
 // ─── State ───────────────────────────────────────────────────────────────────
 let COUNTRIES = [], MATRIX = [], N = 0;
-let mdsCoords = null;   // cached MDS projection
-let hacCache  = {};     // linkage -> {merges, n}
+let mdsCoords     = null;   // active MDS projection
+let fullMdsCoords = null;   // MDS on full precomputed matrix (never changes)
+let hacCache      = {};     // linkage -> {merges, n}
+// Feature-based clustering
+let TREES         = [];     // raw tree objects (lazy-loaded)
+let FEAT_MATRIX   = null;   // feature-specific similarity matrix
+let ACTIVE_MATRIX = null;   // points to MATRIX or FEAT_MATRIX
+let ACTIVE_ATTRS  = null;   // Set of selected attribute labels, or null in full-tree mode
 
 const PALETTE = [
   ...d3.schemeTableau10,
@@ -204,17 +262,25 @@ const dname = i => COUNTRIES[i].replace(/_/g, ' ');
 async function loadData() {
   const resp = await fetch('../data/similarity_matrix.json');
   const data = await resp.json();
-  COUNTRIES = data.countries;
-  MATRIX    = data.matrix;
-  N         = COUNTRIES.length;
+  COUNTRIES     = data.countries;
+  MATRIX        = data.matrix;
+  N             = COUNTRIES.length;
+  ACTIVE_MATRIX = MATRIX;
+
+  document.getElementById('loading-msg').textContent = 'Loading country trees…';
+  await tick();
+  await loadAllTrees();
+  buildAttrPicker();
 
   document.getElementById('loading-msg').textContent = 'Computing MDS projection…';
   await tick();
-  mdsCoords = classicalMDS();
+  fullMdsCoords = classicalMDS();
+  mdsCoords     = fullMdsCoords;
 
   document.getElementById('loading-msg').textContent = 'Precomputing HAC (average)…';
   await tick();
-  computeHAC('average');   // warm cache for default setting
+  computeHAC('ward');
+  initCutSlider('ward');
 
   document.getElementById('loading').style.display = 'none';
   document.getElementById('app').classList.remove('d-none');
@@ -227,7 +293,7 @@ function tick() {
 }
 
 // ─── Distance helper ──────────────────────────────────────────────────────────
-function dist(i, j) { return 1 - MATRIX[i][j]; }
+function dist(i, j) { return 1 - ACTIVE_MATRIX[i][j]; }
 
 // ─── K-Medoids (PAM) ─────────────────────────────────────────────────────────
 function kmedoids(k, seed, maxIter = 100) {
@@ -285,7 +351,7 @@ function computeHAC(linkage) {
   const d   = new Float32Array(MAX * MAX);
   for (let i = 0; i < N; i++)
     for (let j = 0; j < N; j++)
-      d[i * MAX + j] = 1 - MATRIX[i][j];
+      d[i * MAX + j] = 1 - ACTIVE_MATRIX[i][j];
 
   const sizes  = new Int32Array(MAX);
   for (let i = 0; i < N; i++) sizes[i] = 1;
@@ -312,7 +378,11 @@ function computeHAC(linkage) {
       let nd;
       if      (linkage === 'single')   nd = Math.min(dAC, dBC);
       else if (linkage === 'complete') nd = Math.max(dAC, dBC);
-      else                             nd = (sA * dAC + sB * dBC) / (sA + sB);
+      else if (linkage === 'ward') {
+        const sC = sizes[c];
+        nd = ((sA + sC) * dAC + (sB + sC) * dBC - sC * d[bestA * MAX + bestB]) / (sA + sB + sC);
+      }
+      else                             nd = (sA * dAC + sB * dBC) / (sA + sB); // average
       d[id * MAX + c] = d[c * MAX + id] = nd;
     }
 
@@ -345,6 +415,55 @@ function hacCut(result, k) {
     members[cid].forEach(i => asgn[i] = ci);
   });
   return { assignments: asgn, clusters, cutDistance: cutDist };
+}
+
+function hacCutByDistance(result, threshold) {
+  const { merges, n } = result;
+  const members = Object.fromEntries(Array.from({length: n}, (_, i) => [i, [i]]));
+  const active  = new Set(Array.from({length: n}, (_, i) => i));
+
+  for (const m of merges) {
+    if (m.distance > threshold) break;
+    members[m.new_id] = [...members[m.cluster_a], ...members[m.cluster_b]];
+    active.delete(m.cluster_a); active.delete(m.cluster_b); active.add(m.new_id);
+  }
+
+  const asgn = new Array(n).fill(0);
+  const clusters = [];
+  [...active].sort((a, b) => a - b).forEach((cid, ci) => {
+    clusters.push(members[cid]);
+    members[cid].forEach(i => asgn[i] = ci);
+  });
+  return { assignments: asgn, clusters, cutDistance: threshold };
+}
+
+function findLargestGapCut(hacRes) {
+  const dists = hacRes.merges.map(m => m.distance);
+  let maxGap = -1, bestIdx = dists.length - 1;
+  for (let i = 1; i < dists.length; i++) {
+    const gap = dists[i] - dists[i - 1];
+    if (gap > maxGap) { maxGap = gap; bestIdx = i; }
+  }
+  // Place cut midway between the two merges bracketing the largest gap
+  return (dists[bestIdx - 1] + dists[bestIdx]) / 2;
+}
+
+function initCutSlider(linkage) {
+  const hacRes = computeHAC(linkage);
+  const maxD   = hacRes.merges[hacRes.merges.length - 1]?.distance || 1;
+  const slider = document.getElementById('cut-slider');
+  slider.max   = maxD.toFixed(6);
+  slider.step  = (maxD / 1000).toFixed(6);
+
+  const best   = findLargestGapCut(hacRes);
+  slider.value = best.toFixed(6);
+  updateCutBadges(hacRes, best);
+}
+
+function updateCutBadges(hacRes, threshold) {
+  document.getElementById('cut-badge').textContent = (+threshold).toFixed(3);
+  const k = hacCutByDistance(hacRes, +threshold).clusters.length;
+  document.getElementById('cut-k-badge').textContent = `${k} cluster${k !== 1 ? 's' : ''}`;
 }
 
 // ─── Evaluation ───────────────────────────────────────────────────────────────
@@ -482,7 +601,7 @@ function renderScatter(asgn, medoids) {
 }
 
 // ─── Render: dendrogram ───────────────────────────────────────────────────────
-function renderDendrogram(hacResult, cut) {
+function renderDendrogram(hacResult, cut, cutLineAt) {
   const { merges } = hacResult;
   const { assignments: asgn, clusters, cutDistance } = cut;
 
@@ -534,12 +653,10 @@ function renderDendrogram(hacResult, cut) {
     g.append('line').attr('x1',xP).attr('y1',yA).attr('x2',xP).attr('y2',yB).attr('stroke',clr).attr('stroke-width',w1);
   });
 
-  // Cut line — placed midway between last included and first excluded merge
-  if (cutDistance > 0) {
-    const stop = N - clusters.length;
-    const nextDist = stop < merges.length ? merges[stop].distance : maxD;
-    const lineDist = (cutDistance + nextDist) / 2;
-    const xC = xS(lineDist);
+  // Cut line
+  const linePos = cutLineAt != null ? cutLineAt : cutDistance;
+  if (linePos > 0) {
+    const xC = xS(linePos);
     g.append('line').attr('x1',xC).attr('y1',0).attr('x2',xC).attr('y2',H)
       .attr('stroke','#e74c3c').attr('stroke-dasharray','5,3').attr('stroke-width',1.5);
     g.append('text').attr('x',xC+3).attr('y',12).attr('fill','#e74c3c')
@@ -561,11 +678,61 @@ function renderDendrogram(hacResult, cut) {
     .attr('text-anchor','middle').attr('font-size','9px').attr('fill','#666').text('Distance (1 − similarity)');
 }
 
+// ─── Cluster feature profile ──────────────────────────────────────────────────
+function clusterFeatureProfile(members) {
+  if (!TREES.length) return null;
+
+  // In feature mode use only the selected attrs; in full-tree mode scan everything
+  let attrsToCheck;
+  if (ACTIVE_ATTRS && ACTIVE_ATTRS.size) {
+    attrsToCheck = [...ACTIVE_ATTRS];
+  } else {
+    const attrSet = new Set();
+    members.forEach(idx => (TREES[idx].children || []).forEach(c => attrSet.add(nodeLabel(c))));
+    attrsToCheck = [...attrSet];
+  }
+
+  const results = [];
+  for (const attr of attrsToCheck) {
+    const present = members.filter(idx =>
+      (TREES[idx].children || []).some(c => nodeLabel(c) === attr)
+    );
+    if (!present.length) continue;
+
+    // Collect leaf values from this subtree across present cluster members
+    const freq = new Map();
+    for (const idx of present) {
+      const child = (TREES[idx].children || []).find(c => nodeLabel(c) === attr);
+      const collect = n => {
+        if (isLeaf(n)) freq.set(nodeLabel(n), (freq.get(nodeLabel(n)) || 0) + 1);
+        else (n.children || []).forEach(collect);
+      };
+      collect(child);
+    }
+
+    const topVals = [...freq.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([v]) => v.replace(/_/g, ' '));
+
+    results.push({
+      attr,
+      count: present.length,
+      pct:   Math.round(present.length / members.length * 100),
+      topVals
+    });
+  }
+
+  const sorted = results.sort((a, b) => b.pct - a.pct);
+  // In full-tree mode cap at 10 rows to keep the cards readable
+  return ACTIVE_ATTRS ? sorted : sorted.slice(0, 10);
+}
+
 // ─── Render: cluster cards ────────────────────────────────────────────────────
 function renderClusters(asgn, clusters, medoids) {
   const medSet = new Set(medoids || []);
   document.getElementById('cluster-cards').innerHTML = clusters.map((members, ci) => {
-    const c = col(ci);
+    const c      = col(ci);
     const medoid = medoids ? dname(medoids[ci]) : null;
     const chips  = members.map(idx => {
       const med = medSet.has(idx);
@@ -574,6 +741,23 @@ function renderClusters(asgn, clusters, medoids) {
         ${dname(idx)}${med?' ★':''}
       </span>`;
     }).join('');
+
+    const profile = clusterFeatureProfile(members);
+    const profileHtml = profile && profile.length ? `
+      <div class="mt-2 pt-2 border-top">
+        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#6c757d;margin-bottom:4px;">
+          Shared features
+        </div>
+        ${profile.map(f => `
+          <div style="font-size:11px;margin-top:3px;display:flex;align-items:baseline;gap:5px;flex-wrap:wrap;">
+            <span style="background:${c}22;color:${c};border:1px solid ${c}44;border-radius:4px;padding:0 5px;font-weight:700;white-space:nowrap;">
+              ${f.pct}%
+            </span>
+            <span style="font-weight:600;">${f.attr.replace(/_/g,' ')}</span>
+            ${f.topVals.length ? `<span class="text-muted" style="font-size:10px;">— ${f.topVals.join(', ')}</span>` : ''}
+          </div>`).join('')}
+      </div>` : '';
+
     return `
       <div class="mb-3 pb-3 border-bottom">
         <div class="d-flex align-items-center gap-2 mb-1">
@@ -583,6 +767,7 @@ function renderClusters(asgn, clusters, medoids) {
           ${medoid ? `<span class="badge" style="background:${c}22;color:${c};border:1px solid ${c}44;font-size:10px;font-weight:600;">medoid: ${medoid}</span>` : ''}
         </div>
         <div>${chips}</div>
+        ${profileHtml}
       </div>`;
   }).join('');
 }
@@ -614,15 +799,17 @@ async function run() {
       document.getElementById('loading').style.display = 'flex';
       await tick();
       computeHAC(linkage);
+      initCutSlider(linkage);
       document.getElementById('loading').style.display = 'none';
     }
-    const hacRes = hacCache[linkage];
-    const cut    = hacCut(hacRes, k);
+    const hacRes    = hacCache[linkage];
+    const threshold = +document.getElementById('cut-slider').value;
+    const cut       = hacCutByDistance(hacRes, threshold);
     asgn = cut.assignments; clusters = cut.clusters;
-    extraVal   = cut.cutDistance.toFixed(4); extraLabel = 'Cut Distance';
+    extraVal   = threshold.toFixed(4); extraLabel = 'Cut Distance';
     document.getElementById('viz-title').textContent    = `Dendrogram (${linkage} linkage)`;
     document.getElementById('viz-subtitle').textContent = 'Leaves colored by cluster. Red dashed line = cut.';
-    renderDendrogram(hacRes, cut);
+    renderDendrogram(hacRes, cut, threshold);
   }
 
   // Evaluation
@@ -691,7 +878,7 @@ function renderElbowChart(selector, ks, series, title) {
   const svg = d3.select(selector).append('svg').attr('width', W).attr('height', H);
   const g   = svg.append('g').attr('transform', `translate(${mg.left},${mg.top})`);
 
-  const xS = d3.scalePoint().domain(ks.map(String)).range([0, iw]).padding(0.3);
+  const xS = d3.scaleLinear().domain([d3.min(ks), d3.max(ks)]).range([0, iw]);
   const allVals = series.flatMap(s => s.values);
   const yS = d3.scaleLinear().domain([
     Math.min(...allVals) * (Math.min(...allVals) >= 0 ? 0.85 : 1.1),
@@ -703,7 +890,7 @@ function renderElbowChart(selector, ks, series, title) {
     .call(a => { a.selectAll('.tick line').attr('stroke','#f0f0f0'); a.select('.domain').remove(); });
 
   // Axes
-  g.append('g').attr('transform',`translate(0,${ih})`).call(d3.axisBottom(xS).tickFormat(d => 'k='+d))
+  g.append('g').attr('transform',`translate(0,${ih})`).call(d3.axisBottom(xS).tickValues(ks).tickFormat(d => 'k='+d))
     .call(a => a.selectAll('text').attr('font-size','10px'));
   g.append('g').call(d3.axisLeft(yS).ticks(5).tickFormat(d3.format('.3f')))
     .call(a => a.selectAll('text').attr('font-size','10px'));
@@ -712,14 +899,14 @@ function renderElbowChart(selector, ks, series, title) {
   g.append('text').attr('x', iw/2).attr('y', -18)
     .attr('text-anchor','middle').attr('font-size','11px').attr('font-weight','600').text(title);
 
-  const line = d3.line().x((_,i) => xS(String(ks[i]))).y(v => yS(v)).curve(d3.curveMonotoneX);
+  const line = d3.line().x((_,i) => xS(ks[i])).y(v => yS(v)).curve(d3.curveMonotoneX);
 
   series.forEach(({label, values, color}, si) => {
     g.append('path').datum(values).attr('d', line(values))
       .attr('fill','none').attr('stroke', color).attr('stroke-width', 2.2);
 
     g.selectAll(null).data(values).join('circle')
-      .attr('cx', (_,i) => xS(String(ks[i]))).attr('cy', v => yS(v))
+      .attr('cx', (_,i) => xS(ks[i])).attr('cy', v => yS(v))
       .attr('r', 4.5).attr('fill', color).attr('stroke','white').attr('stroke-width',1.5);
 
     // Legend entry
@@ -731,6 +918,163 @@ function renderElbowChart(selector, ks, series, title) {
   });
 }
 
+// ─── TED helpers (for feature-based clustering) ───────────────────────────────
+function isLeaf(node) { return !node.children || node.children.length === 0; }
+function nodeLabel(node) { return String(node.label || ''); }
+
+function parseNumericValue(raw) {
+  if (raw == null) return null;
+  const text = String(raw).trim();
+  if (!text) return null;
+  const cleaned = text.replace(/,/g, '').match(/[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?%?/);
+  if (!cleaned) return null;
+  const token = cleaned[0];
+  const value = Number.parseFloat(token.endsWith('%') ? token.slice(0, -1) : token);
+  return Number.isFinite(value) ? value : null;
+}
+
+function numericLeafUpdateCost(la, lb) {
+  const a = parseNumericValue(la), b = parseNumericValue(lb);
+  if (a == null || b == null) return null;
+  return Math.max(0, Math.min(1, Math.abs(a - b) / Math.max(Math.abs(a), Math.abs(b), 1)));
+}
+
+function cloneSerializable(node) {
+  return { label: nodeLabel(node), children: (node.children || []).map(cloneSerializable) };
+}
+function serializeNode(node) { return JSON.stringify(cloneSerializable(node)); }
+
+function collectSubtreeSerials(node, out = new Set()) {
+  out.add(serializeNode(node));
+  (node.children || []).forEach(c => collectSubtreeSerials(c, out));
+  return out;
+}
+
+function subtreeSize(node) {
+  return 1 + (node.children || []).reduce((s, c) => s + subtreeSize(c), 0);
+}
+
+function makeTedContext(src, tgt) {
+  const srcSubs = collectSubtreeSerials(src);
+  const tgtSubs = collectSubtreeSerials(tgt);
+  const cache   = new Map();
+  const costDel = n => tgtSubs.has(serializeNode(n)) ? 1 : subtreeSize(n);
+  const costIns = n => srcSubs.has(serializeNode(n)) ? 1 : subtreeSize(n);
+  function costUpd(a, b) {
+    if (nodeLabel(a) === nodeLabel(b)) return 0;
+    if (isLeaf(a) && isLeaf(b)) {
+      const nc = numericLeafUpdateCost(nodeLabel(a), nodeLabel(b));
+      return nc != null ? nc : 1;
+    }
+    return costDel(a) + costIns(b);
+  }
+  function ted(a, b) {
+    const key = serializeNode(a) + '|' + serializeNode(b);
+    if (cache.has(key)) return cache.get(key);
+    let result;
+    if (nodeLabel(a) !== nodeLabel(b) && !(isLeaf(a) && isLeaf(b))) {
+      result = costDel(a) + costIns(b);
+    } else {
+      const ac = a.children || [], bc = b.children || [];
+      const m = ac.length, n = bc.length;
+      const dp = Array.from({length: m+1}, () => new Array(n+1).fill(0));
+      dp[0][0] = costUpd(a, b);
+      for (let i = 1; i <= m; i++) dp[i][0] = dp[i-1][0] + costDel(ac[i-1]);
+      for (let j = 1; j <= n; j++) dp[0][j] = dp[0][j-1] + costIns(bc[j-1]);
+      for (let i = 1; i <= m; i++)
+        for (let j = 1; j <= n; j++)
+          dp[i][j] = Math.min(
+            dp[i-1][j-1] + ted(ac[i-1], bc[j-1]),
+            dp[i-1][j]   + costDel(ac[i-1]),
+            dp[i][j-1]   + costIns(bc[j-1])
+          );
+      result = dp[m][n];
+    }
+    cache.set(key, result);
+    return result;
+  }
+  return { ted };
+}
+
+function computeTedSim(t1, t2) {
+  const { ted } = makeTedContext(t1, t2);
+  const total = subtreeSize(t1) + subtreeSize(t2);
+  return total ? Math.max(0, 1 - ted(t1, t2) / total) : 1;
+}
+
+// ─── Feature-based clustering helpers ────────────────────────────────────────
+function filterTree(tree, selectedSet) {
+  return {
+    label: nodeLabel(tree) || 'root',
+    children: (tree.children || []).filter(c => selectedSet.has(nodeLabel(c)))
+  };
+}
+
+async function loadAllTrees() {
+  const data = await Promise.all(
+    COUNTRIES.map(name => fetch(`../data/trees_tokens/${name}.json`).then(r => r.json()))
+  );
+  TREES = data.map(d => d.tree);
+}
+
+function buildAttrPicker() {
+  const freq = new Map();
+  TREES.forEach(tree =>
+    (tree.children || []).forEach(child => {
+      const lbl = nodeLabel(child);
+      freq.set(lbl, (freq.get(lbl) || 0) + 1);
+    })
+  );
+  const sorted = [...freq.entries()].sort((a, b) => b[1] - a[1]);
+
+  const container = document.getElementById('feat-checks');
+  container.innerHTML = sorted.map(([label, count]) =>
+    `<div class="form-check me-2" style="white-space:nowrap">
+      <input class="form-check-input feat-attr-cb" type="checkbox" id="attr-${label}" value="${label}">
+      <label class="form-check-label" for="attr-${label}" style="font-size:12px;">
+        ${label.replace(/_/g, ' ')} <span class="text-muted">(${count})</span>
+      </label>
+    </div>`
+  ).join('');
+
+  container.querySelectorAll('.feat-attr-cb').forEach(cb =>
+    cb.addEventListener('change', updateFeatSummary)
+  );
+  updateFeatSummary();
+}
+
+function updateFeatSummary() {
+  const checked = [...document.querySelectorAll('.feat-attr-cb:checked')];
+  document.getElementById('feat-compute-btn').disabled = checked.length === 0;
+  if (!checked.length) {
+    document.getElementById('feat-summary').textContent = 'Select at least one attribute.';
+    return;
+  }
+  const sel = new Set(checked.map(cb => cb.value));
+  const cov = TREES.filter(t => (t.children || []).some(c => sel.has(nodeLabel(c)))).length;
+  document.getElementById('feat-summary').textContent =
+    `${checked.length} attribute${checked.length > 1 ? 's' : ''} selected — ${cov}/${N} countries have data`;
+}
+
+async function computeFeatureMatrix(selectedSet) {
+  const mat      = Array.from({length: N}, () => new Array(N).fill(1));
+  const progBar  = document.getElementById('feat-progress-bar');
+  const progText = document.getElementById('feat-progress-text');
+  for (let i = 0; i < N; i++) {
+    const ti = filterTree(TREES[i], selectedSet);
+    for (let j = i + 1; j < N; j++) {
+      const sim = computeTedSim(ti, filterTree(TREES[j], selectedSet));
+      mat[i][j] = mat[j][i] = sim;
+    }
+    // Yield after every country so the browser repaints the progress bar
+    const pct = ((i + 1) / N * 100).toFixed(1);
+    progBar.style.width  = pct + '%';
+    progText.textContent = `${i + 1} / ${N} countries processed (${pct}%)`;
+    await tick();
+  }
+  return mat;
+}
+
 // ─── UI wiring ────────────────────────────────────────────────────────────────
 document.getElementById('k-slider').addEventListener('input', function () {
   document.getElementById('k-badge').textContent = this.value;
@@ -738,15 +1082,97 @@ document.getElementById('k-slider').addEventListener('input', function () {
 
 document.querySelectorAll('input[name="algo"]').forEach(r =>
   r.addEventListener('change', function () {
-    document.getElementById('km-params').classList.toggle('d-none',  this.value !== 'kmedoids');
-    document.getElementById('hac-params').classList.toggle('d-none', this.value !== 'hac');
+    const isHAC = this.value === 'hac';
+    document.getElementById('km-k-params').classList.toggle('d-none',   isHAC);
+    document.getElementById('km-params').classList.toggle('d-none',     isHAC);
+    document.getElementById('hac-params').classList.toggle('d-none',    !isHAC);
+    document.getElementById('hac-cut-params').classList.toggle('d-none', !isHAC);
   })
 );
+
+document.getElementById('hac-linkage').addEventListener('change', function () {
+  initCutSlider(this.value);
+});
+
+document.getElementById('cut-slider').addEventListener('input', function () {
+  const linkage = document.getElementById('hac-linkage').value;
+  const hacRes  = hacCache[linkage];
+  if (hacRes) updateCutBadges(hacRes, +this.value);
+});
 
 document.getElementById('run-btn').addEventListener('click', run);
 document.getElementById('elbow-btn').addEventListener('click', runElbow);
 
+// Feature mode toggle
+document.querySelectorAll('input[name="feat-mode"]').forEach(r =>
+  r.addEventListener('change', async function () {
+    document.getElementById('feat-picker').classList.toggle('d-none', this.value !== 'selected');
+    if (this.value === 'selected') {
+      // trees are loaded at startup — nothing extra needed
+    } else {
+      if (ACTIVE_MATRIX !== MATRIX) {
+        ACTIVE_MATRIX = MATRIX;
+        ACTIVE_ATTRS  = null;
+        hacCache      = {};
+        mdsCoords     = fullMdsCoords;
+        run();
+      }
+    }
+  })
+);
+
+document.getElementById('feat-all-btn').addEventListener('click', () => {
+  document.querySelectorAll('.feat-attr-cb').forEach(cb => { cb.checked = true; });
+  updateFeatSummary();
+});
+
+document.getElementById('feat-none-btn').addEventListener('click', () => {
+  document.querySelectorAll('.feat-attr-cb').forEach(cb => { cb.checked = false; });
+  updateFeatSummary();
+});
+
+document.getElementById('feat-compute-btn').addEventListener('click', async () => {
+  const checked = [...document.querySelectorAll('.feat-attr-cb:checked')];
+  if (!checked.length) return;
+  const selectedSet = new Set(checked.map(cb => cb.value));
+
+  const btn  = document.getElementById('feat-compute-btn');
+  const sp   = document.getElementById('feat-spinner');
+  const prog = document.getElementById('feat-progress');
+  btn.disabled = true;
+  sp.classList.remove('d-none');
+  prog.classList.remove('d-none');
+  document.getElementById('feat-progress-bar').style.width = '0%';
+  document.getElementById('feat-progress-text').textContent = 'Starting…';
+  await tick();
+
+  FEAT_MATRIX   = await computeFeatureMatrix(selectedSet);
+  ACTIVE_MATRIX = FEAT_MATRIX;
+  ACTIVE_ATTRS  = selectedSet;
+  hacCache      = {};
+
+  document.getElementById('feat-progress-text').textContent = 'Computing MDS…';
+  await tick();
+  mdsCoords = classicalMDS();
+
+  sp.classList.add('d-none');
+  prog.classList.add('d-none');
+  btn.disabled = false;
+
+  run();
+});
+
 // ─── Boot ─────────────────────────────────────────────────────────────────────
+// Sync control visibility with whichever algo radio is checked on load
+(function initAlgoUI() {
+  const algo = document.querySelector('input[name="algo"]:checked').value;
+  const isHAC = algo === 'hac';
+  document.getElementById('km-k-params').classList.toggle('d-none',    isHAC);
+  document.getElementById('km-params').classList.toggle('d-none',      isHAC);
+  document.getElementById('hac-params').classList.toggle('d-none',     !isHAC);
+  document.getElementById('hac-cut-params').classList.toggle('d-none', !isHAC);
+})();
+
 loadData();
 </script>
 </body>

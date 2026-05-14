@@ -1,5 +1,7 @@
 import argparse
 import json
+import math
+import re
 from functools import lru_cache
 from pathlib import Path
 
@@ -83,24 +85,50 @@ def cost_ins_tree(node: dict) -> int:
     return subtree_size(node)
 
 
-def cost_upd_root(a: dict, b: dict) -> int:
+def _try_numeric(label: str) -> float | None:
+    """Parse a label as a number, stripping commas and optional trailing '%'."""
+    text = str(label).strip().replace(",", "")
+    m = re.fullmatch(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?%?", text)
+    if not m:
+        return None
+    try:
+        value = float(m.group(0).rstrip("%"))
+        return value if math.isfinite(value) else None
+    except ValueError:
+        return None
+
+
+def _numeric_leaf_cost(label_a: str, label_b: str) -> float | None:
+    """Return proportional distance in [0,1] if both labels are numeric, else None."""
+    va = _try_numeric(label_a)
+    vb = _try_numeric(label_b)
+    if va is None or vb is None:
+        return None
+    scale = max(abs(va), abs(vb), 1.0)
+    return max(0.0, min(1.0, abs(va - vb) / scale))
+
+
+def cost_upd_root(a: dict, b: dict) -> float:
     """
     Root update cost.
 
     Project rule:
     - identical labels => 0
-    - different leaf labels => 1
+    - different leaf labels => numeric proportional cost if both numeric, else 1
     - different internal labels => replace whole subtree rather than rename it
     """
     if node_label(a) == node_label(b):
-        return 0
+        return 0.0
     if is_leaf(a) and is_leaf(b):
-        return 1
-    return cost_del_tree(a) + cost_ins_tree(b)
+        numeric_cost = _numeric_leaf_cost(node_label(a), node_label(b))
+        if numeric_cost is not None:
+            return numeric_cost
+        return 1.0
+    return float(cost_del_tree(a) + cost_ins_tree(b))
 
 
 @lru_cache(maxsize=None)
-def ted(a_serial: str, b_serial: str) -> int:
+def ted(a_serial: str, b_serial: str) -> float:
     """
     Ordered tree edit distance based on the subtree-DP recurrence in the provided
     algorithm sketch.
@@ -139,7 +167,7 @@ def ted(a_serial: str, b_serial: str) -> int:
     return dist[m][n]
 
 
-def normalized_similarity(distance: int, size1: int, size2: int) -> float:
+def normalized_similarity(distance: float, size1: int, size2: int) -> float:
     """
     Convert the distance into an intuitive similarity score in [0,1].
     """
