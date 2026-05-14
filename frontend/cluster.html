@@ -198,6 +198,21 @@
       </div>
     </div>
 
+    <!-- Evaluation reference data selector -->
+    <div class="card shadow-sm mb-3">
+      <div class="card-body py-2">
+        <div class="d-flex flex-wrap align-items-center gap-3">
+          <span class="fw-semibold small">Evaluation Reference Data</span>
+          <select class="form-select form-select-sm" id="ref-data" style="width:220px;">
+            <option value="none">None — internal metrics only</option>
+            <option value="continents">Continents (7 groups)</option>
+            <option value="un_regions">UN Regions (5 groups)</option>
+          </select>
+          <span class="text-muted small" id="ref-coverage"></span>
+        </div>
+      </div>
+    </div>
+
     <!-- Stats row -->
     <div class="row g-3 mb-4 d-none" id="stats-row">
       <div class="col-6 col-sm-3">
@@ -222,6 +237,40 @@
         <div class="stat-box">
           <div class="stat-value text-secondary" id="stat-extra">-</div>
           <div class="stat-label" id="stat-extra-label">Cost</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- External metrics row (shown only when reference data is selected) -->
+    <div class="row g-3 mb-4 d-none" id="ext-stats-row">
+      <div class="col-12">
+        <div class="d-flex align-items-center gap-2 mb-2">
+          <span class="fw-semibold small">External Evaluation</span>
+          <span class="badge bg-secondary" id="ext-ref-label">-</span>
+        </div>
+      </div>
+      <div class="col-6 col-sm-3">
+        <div class="stat-box">
+          <div class="stat-value text-info" id="stat-purity">-</div>
+          <div class="stat-label">Purity <small class="text-muted">(higher better)</small></div>
+        </div>
+      </div>
+      <div class="col-6 col-sm-3">
+        <div class="stat-box">
+          <div class="stat-value text-primary" id="stat-precision">-</div>
+          <div class="stat-label">Precision <small class="text-muted">(higher better)</small></div>
+        </div>
+      </div>
+      <div class="col-6 col-sm-3">
+        <div class="stat-box">
+          <div class="stat-value text-success" id="stat-recall">-</div>
+          <div class="stat-label">Recall <small class="text-muted">(higher better)</small></div>
+        </div>
+      </div>
+      <div class="col-6 col-sm-3">
+        <div class="stat-box">
+          <div class="stat-value text-warning" id="stat-fmeasure">-</div>
+          <div class="stat-label">F-measure <small class="text-muted">(higher better)</small></div>
         </div>
       </div>
     </div>
@@ -312,6 +361,82 @@ const PALETTE = [
 ];
 const col   = i => PALETTE[i % PALETTE.length];
 const dname = i => COUNTRIES[i].replace(/_/g, ' ');
+
+// ─── Ground-truth reference datasets ─────────────────────────────────────────
+const GROUND_TRUTH_DATA = {
+  continents: {
+    label: 'Continents (7)',
+    map: {
+      // Africa
+      Algeria:'Africa',Angola:'Africa',Benin:'Africa',Botswana:'Africa',Burkina_Faso:'Africa',
+      Burundi:'Africa',Cabo_Verde:'Africa',Cape_Verde:'Africa',Cameroon:'Africa',
+      Central_African_Republic:'Africa',Chad:'Africa',Comoros:'Africa',
+      Democratic_Republic_of_the_Congo:'Africa',Republic_of_the_Congo:'Africa',Congo:'Africa',
+      Djibouti:'Africa',Egypt:'Africa',Equatorial_Guinea:'Africa',Eritrea:'Africa',
+      Eswatini:'Africa',Swaziland:'Africa',Ethiopia:'Africa',Gabon:'Africa',Gambia:'Africa',
+      Ghana:'Africa',Guinea:'Africa',Guinea_Bissau:'Africa',Ivory_Coast:'Africa',
+      Cote_d_Ivoire:'Africa',Kenya:'Africa',Lesotho:'Africa',Liberia:'Africa',Libya:'Africa',
+      Madagascar:'Africa',Malawi:'Africa',Mali:'Africa',Mauritania:'Africa',Mauritius:'Africa',
+      Morocco:'Africa',Mozambique:'Africa',Namibia:'Africa',Niger:'Africa',Nigeria:'Africa',
+      Rwanda:'Africa',Sao_Tome_and_Principe:'Africa',Senegal:'Africa',Seychelles:'Africa',
+      Sierra_Leone:'Africa',Somalia:'Africa',South_Africa:'Africa',South_Sudan:'Africa',
+      Sudan:'Africa',Tanzania:'Africa',Togo:'Africa',Tunisia:'Africa',Uganda:'Africa',
+      Zambia:'Africa',Zimbabwe:'Africa',
+      // Asia
+      Afghanistan:'Asia',Armenia:'Asia',Azerbaijan:'Asia',Bahrain:'Asia',Bangladesh:'Asia',
+      Bhutan:'Asia',Brunei:'Asia',Cambodia:'Asia',China:'Asia',Cyprus:'Asia',Georgia:'Asia',
+      India:'Asia',Indonesia:'Asia',Iran:'Asia',Iraq:'Asia',Israel:'Asia',Japan:'Asia',
+      Jordan:'Asia',Kazakhstan:'Asia',Kuwait:'Asia',Kyrgyzstan:'Asia',Laos:'Asia',
+      Lebanon:'Asia',Malaysia:'Asia',Maldives:'Asia',Mongolia:'Asia',Myanmar:'Asia',
+      Nepal:'Asia',North_Korea:'Asia',Oman:'Asia',Pakistan:'Asia',Palestine:'Asia',
+      Philippines:'Asia',Qatar:'Asia',Saudi_Arabia:'Asia',Singapore:'Asia',
+      South_Korea:'Asia',Sri_Lanka:'Asia',Syria:'Asia',Taiwan:'Asia',Tajikistan:'Asia',
+      Thailand:'Asia',Timor_Leste:'Asia',East_Timor:'Asia',Turkey:'Asia',Turkmenistan:'Asia',
+      United_Arab_Emirates:'Asia',Uzbekistan:'Asia',Vietnam:'Asia',Yemen:'Asia',
+      // Europe
+      Albania:'Europe',Andorra:'Europe',Austria:'Europe',Belarus:'Europe',Belgium:'Europe',
+      Bosnia_and_Herzegovina:'Europe',Bulgaria:'Europe',Croatia:'Europe',
+      Czech_Republic:'Europe',Czechia:'Europe',Denmark:'Europe',Estonia:'Europe',
+      Finland:'Europe',France:'Europe',Germany:'Europe',Greece:'Europe',Hungary:'Europe',
+      Iceland:'Europe',Ireland:'Europe',Italy:'Europe',Kosovo:'Europe',Latvia:'Europe',
+      Liechtenstein:'Europe',Lithuania:'Europe',Luxembourg:'Europe',Malta:'Europe',
+      Moldova:'Europe',Monaco:'Europe',Montenegro:'Europe',Netherlands:'Europe',
+      North_Macedonia:'Europe',Norway:'Europe',Poland:'Europe',Portugal:'Europe',
+      Romania:'Europe',Russia:'Europe',San_Marino:'Europe',Serbia:'Europe',
+      Slovakia:'Europe',Slovenia:'Europe',Spain:'Europe',Sweden:'Europe',
+      Switzerland:'Europe',Ukraine:'Europe',United_Kingdom:'Europe',Vatican:'Europe',
+      // North America
+      Antigua_and_Barbuda:'North America',Bahamas:'North America',Barbados:'North America',
+      Belize:'North America',Canada:'North America',Costa_Rica:'North America',
+      Cuba:'North America',Dominica:'North America',Dominican_Republic:'North America',
+      El_Salvador:'North America',Grenada:'North America',Guatemala:'North America',
+      Haiti:'North America',Honduras:'North America',Jamaica:'North America',
+      Mexico:'North America',Nicaragua:'North America',Panama:'North America',
+      Saint_Kitts_and_Nevis:'North America',Saint_Lucia:'North America',
+      Saint_Vincent_and_the_Grenadines:'North America',
+      Trinidad_and_Tobago:'North America',United_States:'North America',
+      // South America
+      Argentina:'South America',Bolivia:'South America',Brazil:'South America',
+      Chile:'South America',Colombia:'South America',Ecuador:'South America',
+      Guyana:'South America',Paraguay:'South America',Peru:'South America',
+      Suriname:'South America',Uruguay:'South America',Venezuela:'South America',
+      // Oceania
+      Australia:'Oceania',Fiji:'Oceania',Kiribati:'Oceania',Marshall_Islands:'Oceania',
+      Micronesia:'Oceania',Nauru:'Oceania',New_Zealand:'Oceania',Palau:'Oceania',
+      Papua_New_Guinea:'Oceania',Samoa:'Oceania',Solomon_Islands:'Oceania',
+      Tonga:'Oceania',Tuvalu:'Oceania',Vanuatu:'Oceania',
+    }
+  },
+  un_regions: {
+    label: 'UN Regions (5)',
+    map: {} // filled below from continents map by merging N+S America → Americas
+  }
+};
+// Build UN 5-region map: merge North/South America into Americas
+Object.entries(GROUND_TRUTH_DATA.continents.map).forEach(([k, v]) => {
+  GROUND_TRUTH_DATA.un_regions.map[k] =
+    (v === 'North America' || v === 'South America') ? 'Americas' : v;
+});
 
 function normalizeCountryName(s) {
   return String(s || '').replace(/_/g, ' ').trim().toLowerCase();
@@ -972,6 +1097,25 @@ async function run() {
   document.getElementById('results-row').classList.remove('d-none');
   document.getElementById('elbow-card').classList.remove('d-none');
 
+  // ── External metrics ────────────────────────────────────────────────────────
+  const refKey = document.getElementById('ref-data').value;
+  const extRow = document.getElementById('ext-stats-row');
+  if (refKey !== 'none') {
+    const refLabels = getRefLabels(refKey);
+    const ext = computeExternalMetrics(asgn, refLabels);
+    if (ext) {
+      document.getElementById('ext-ref-label').textContent =
+        GROUND_TRUTH_DATA[refKey].label + ` — ${ext.covered}/${ext.total} countries matched`;
+      document.getElementById('stat-purity').textContent    = ext.purity.toFixed(4);
+      document.getElementById('stat-precision').textContent = ext.precision.toFixed(4);
+      document.getElementById('stat-recall').textContent    = ext.recall.toFixed(4);
+      document.getElementById('stat-fmeasure').textContent  = ext.fmeasure.toFixed(4);
+      extRow.classList.remove('d-none');
+    }
+  } else {
+    extRow.classList.add('d-none');
+  }
+
   renderClusters(asgn, clusters, medoids);
 
   btn.disabled = false; sp.classList.add('d-none');
@@ -1064,6 +1208,62 @@ function renderElbowChart(selector, ks, series, title) {
   });
 }
 
+// ─── External evaluation metrics ─────────────────────────────────────────────
+function getRefLabels(refKey) {
+  const gt = GROUND_TRUTH_DATA[refKey];
+  if (!gt) return null;
+  return COUNTRIES.map(name => gt.map[name] || null);
+}
+
+function computeExternalMetrics(assignments, refLabels) {
+  // Build index arrays ignoring countries with unknown ground truth
+  const known = [];
+  for (let i = 0; i < N; i++) {
+    if (refLabels[i] !== null) known.push(i);
+  }
+  const n = known.length;
+  if (n < 2) return null;
+
+  // ── Purity ──────────────────────────────────────────────────────────────────
+  const k = Math.max(...known.map(i => assignments[i])) + 1;
+  const clusters = Array.from({length: k}, () => []);
+  known.forEach(i => clusters[assignments[i]].push(i));
+
+  let puritySum = 0;
+  for (const members of clusters) {
+    const freq = new Map();
+    members.forEach(i => {
+      const lbl = refLabels[i];
+      freq.set(lbl, (freq.get(lbl) || 0) + 1);
+    });
+    puritySum += Math.max(...freq.values(), 0);
+  }
+  const purity = puritySum / n;
+
+  // ── Pairwise Precision / Recall / F-measure ──────────────────────────────────
+  // For every pair (a,b) with known labels:
+  //   TP: same cluster  AND same reference class
+  //   FP: same cluster  AND different reference class
+  //   FN: diff cluster  AND same reference class
+  let TP = 0, FP = 0, FN = 0;
+  for (let a = 0; a < known.length; a++) {
+    for (let b = a + 1; b < known.length; b++) {
+      const ia = known[a], ib = known[b];
+      const sameCluster = assignments[ia] === assignments[ib];
+      const sameClass   = refLabels[ia]   === refLabels[ib];
+      if      ( sameCluster &&  sameClass) TP++;
+      else if ( sameCluster && !sameClass) FP++;
+      else if (!sameCluster &&  sameClass) FN++;
+    }
+  }
+  const precision = TP + FP > 0 ? TP / (TP + FP) : 0;
+  const recall    = TP + FN > 0 ? TP / (TP + FN) : 0;
+  const fmeasure  = precision + recall > 0
+    ? 2 * precision * recall / (precision + recall) : 0;
+
+  return { purity, precision, recall, fmeasure, covered: n, total: N };
+}
+
 // ─── TED helpers (for feature-based clustering) ───────────────────────────────
 function isLeaf(node) { return !node.children || node.children.length === 0; }
 function nodeLabel(node) { return String(node.label || ''); }
@@ -1098,6 +1298,11 @@ function collectSubtreeSerials(node, out = new Set()) {
 
 function subtreeSize(node) {
   return 1 + (node.children || []).reduce((s, c) => s + subtreeSize(c), 0);
+}
+
+function sortTree(node) {
+  const sorted = (node.children || []).slice().sort((a, b) => nodeLabel(a).localeCompare(nodeLabel(b)));
+  return { ...node, children: sorted.map(sortTree) };
 }
 
 function makeTedContext(src, tgt) {
@@ -1143,6 +1348,8 @@ function makeTedContext(src, tgt) {
 }
 
 function computeTedSim(t1, t2) {
+  t1 = sortTree(t1);
+  t2 = sortTree(t2);
   const { ted } = makeTedContext(t1, t2);
   const total = subtreeSize(t1) + subtreeSize(t2);
   return total ? Math.max(0, 1 - ted(t1, t2) / total) : 1;
@@ -1160,7 +1367,7 @@ async function loadAllTrees() {
   const data = await Promise.all(
     COUNTRIES.map(name => fetch(`../data/trees_tokens/${name}.json`).then(r => r.json()))
   );
-  TREES = data.map(d => d.tree);
+  TREES = data.map(d => sortTree(d.tree));
 }
 
 function buildAttrPicker() {
@@ -1255,6 +1462,9 @@ bindIfExists('cut-slider', 'input', function () {
 
 bindIfExists('run-btn', 'click', run);
 bindIfExists('elbow-btn', 'click', runElbow);
+bindIfExists('ref-data', 'change', () => {
+  if (!document.getElementById('stats-row').classList.contains('d-none')) run();
+});
 bindIfExists('show-matrix-btn', 'click', openMatrixOverlay);
 bindIfExists('close-matrix-btn', 'click', closeMatrixOverlay);
 bindIfExists('matrix-overlay', 'click', (e) => {

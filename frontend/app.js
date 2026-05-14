@@ -295,7 +295,9 @@ async function loadTreeByCountry(countryName, dir = DISPLAY_TREE_DIR) {
   const stem = toStem(countryName);
   const res = await fetch(`${DATA_ROOT}/${dir}/${encodeURIComponent(stem)}.json`);
   if (!res.ok) throw new Error(`Could not load tree file for ${countryName}`);
-  return res.json();
+  const obj = await res.json();
+  obj.tree = sortTree(obj.tree);
+  return obj;
 }
 
 function cloneNode(node) {
@@ -1242,7 +1244,14 @@ function makeTedContext(sourceTree, targetTree) {
   return { ted, forestDp, costDelTree, costInsTree };
 }
 
+function sortTree(node) {
+  const sorted = (node.children || []).slice().sort((a, b) => nodeLabel(a).localeCompare(nodeLabel(b)));
+  return { ...node, children: sorted.map(sortTree) };
+}
+
 function computeTedMetrics(tree1, tree2) {
+  tree1 = sortTree(tree1);
+  tree2 = sortTree(tree2);
   const { ted } = makeTedContext(tree1, tree2);
   const size1 = subtreeSize(tree1);
   const size2 = subtreeSize(tree2);

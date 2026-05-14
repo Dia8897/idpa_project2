@@ -13,8 +13,14 @@ _ACTIVE_TARGET_SUBTREES = frozenset()
 
 def load_tree(path: Path):
     with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)["tree"]
-        # This opens a JSON file and returns only the "tree" part.
+        tree = json.load(f)["tree"]
+    return sort_tree(tree)
+
+
+def sort_tree(node: dict) -> dict:
+    """Sort children alphabetically by label at every level for canonical ordering."""
+    children = sorted(node.get("children", []), key=lambda c: node_label(c))
+    return {**node, "children": [sort_tree(c) for c in children]}
 
 
 def node_label(node: dict) -> str:
