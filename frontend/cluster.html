@@ -25,6 +25,30 @@
     }
     #viz-area svg { display: block; }
     .algo-badge { font-size: .7rem; padding: 2px 8px; border-radius: 10px; }
+    .matrix-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,.55);
+      display: none; align-items: center; justify-content: center; z-index: 1100;
+      padding: 18px;
+    }
+    .matrix-modal {
+      width: min(96vw, 1400px); max-height: 92vh;
+      background: #fff; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.25);
+      display: flex; flex-direction: column; overflow: hidden;
+    }
+    .matrix-modal-head {
+      display:flex; align-items:center; justify-content:space-between;
+      padding:10px 14px; border-bottom:1px solid #dee2e6;
+    }
+    .matrix-modal-body { padding: 10px 14px 14px; overflow: hidden; }
+    .matrix-scroll { max-height: calc(92vh - 120px); overflow: auto; border: 1px solid #dee2e6; border-radius: 8px; }
+    .matrix-table { border-collapse: separate; border-spacing: 0; font-size: 11px; min-width: 980px; width: max-content; }
+    .matrix-table th, .matrix-table td {
+      padding: 4px 6px; text-align: center; white-space: nowrap;
+      border-right: 1px solid #fff; border-bottom: 1px solid #fff;
+    }
+    .matrix-table th { position: sticky; top: 0; background: #f8f9fa; z-index: 2; }
+    .matrix-row-h { position: sticky; left: 0; background: #f8f9fa; z-index: 3; font-weight: 700; }
+    .matrix-corner { left: 0; z-index: 4 !important; }
   </style>
 </head>
 <body>
@@ -116,6 +140,10 @@
             </button>
           </div>
 
+          <div class="col-auto">
+            <button class="btn btn-outline-primary" id="show-matrix-btn" type="button">Show Similarity Matrix</button>
+          </div>
+
         </div>
 
         <!-- Feature selection -->
@@ -155,6 +183,14 @@
                 <div class="progress-bar bg-success" id="feat-progress-bar" style="width:0%;"></div>
               </div>
               <span class="text-muted" style="font-size:11px;" id="feat-progress-text"></span>
+            </div>
+          </div>
+          <div class="col-12">
+            <label class="form-label fw-semibold mb-1">Find Country Cluster</label>
+            <div class="d-flex flex-wrap align-items-center gap-2">
+              <input id="cluster-country-search" class="form-control form-control-sm" style="max-width:320px;" list="cluster-country-list" placeholder="Type country name..." />
+              <datalist id="cluster-country-list"></datalist>
+              <span class="text-muted small" id="cluster-country-result">Run clustering, then search a country to see its cluster.</span>
             </div>
           </div>
         </div>
@@ -235,6 +271,23 @@
   </div><!-- /container-xl -->
 </div><!-- /app -->
 
+<!-- Similarity Matrix Overlay -->
+<div id="matrix-overlay" class="matrix-overlay" aria-hidden="true">
+  <div class="matrix-modal">
+    <div class="matrix-modal-head">
+      <div>
+        <strong>Similarity Matrix</strong>
+        <span class="text-muted small ms-2">Loaded from active matrix</span>
+      </div>
+      <button id="close-matrix-btn" class="btn btn-sm btn-outline-secondary" type="button">Close</button>
+    </div>
+    <div class="matrix-modal-body">
+      <div id="matrix-modal-status" class="text-muted small mb-2">Ready.</div>
+      <div id="matrix-modal-content" class="matrix-scroll"></div>
+    </div>
+  </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
 <script>
@@ -250,6 +303,8 @@ let TREES         = [];     // raw tree objects (lazy-loaded)
 let FEAT_MATRIX   = null;   // feature-specific similarity matrix
 let ACTIVE_MATRIX = null;   // points to MATRIX or FEAT_MATRIX
 let ACTIVE_ATTRS  = null;   // Set of selected attribute labels, or null in full-tree mode
+let LAST_ASSIGNMENTS = null;
+let LAST_CLUSTERS    = null;
 
 const PALETTE = [
   ...d3.schemeTableau10,
@@ -257,6 +312,92 @@ const PALETTE = [
 ];
 const col   = i => PALETTE[i % PALETTE.length];
 const dname = i => COUNTRIES[i].replace(/_/g, ' ');
+
+function normalizeCountryName(s) {
+  return String(s || '').replace(/_/g, ' ').trim().toLowerCase();
+}
+
+function populateCountrySearchList() {
+  const dl = document.getElementById('cluster-country-list');
+  if (!dl) return;
+  dl.innerHTML = COUNTRIES.map(c => `<option value="${c.replace(/_/g, ' ')}"></option>`).join('');
+}
+
+function updateCountryClusterLookup() {
+  const input = document.getElementById('cluster-country-search');
+  const out   = document.getElementById('cluster-country-result');
+  if (!input || !out) return;
+
+  const q = normalizeCountryName(input.value);
+  if (!q) {
+    out.textContent = 'Run clustering, then search a country to see its cluster.';
+    return;
+  }
+  if (!LAST_ASSIGNMENTS) {
+    out.textContent = 'No clustering result yet. Click Run first.';
+    return;
+  }
+
+  const idx = COUNTRIES.findIndex(c => normalizeCountryName(c) === q);
+  if (idx < 0) {
+    out.textContent = `Country "${input.value}" not found.`;
+    return;
+  }
+
+  const clusterIdx = LAST_ASSIGNMENTS[idx];
+  const size = LAST_CLUSTERS?.[clusterIdx]?.length ?? 0;
+  out.textContent = `${dname(idx)} is in Cluster ${clusterIdx + 1}${size ? ` (${size} countries)` : ''}.`;
+}
+
+function matrixCellColor(i, j) {
+  return i === j ? '#d9f7d9' : '#ffffff';
+}
+
+function renderMatrixOverlay() {
+  const content = document.getElementById('matrix-modal-content');
+  const status  = document.getElementById('matrix-modal-status');
+  if (!content || !status) return;
+  if (!COUNTRIES.length || !ACTIVE_MATRIX?.length) {
+    status.textContent = 'Similarity matrix not available.';
+    content.innerHTML = '';
+    return;
+  }
+
+  const matrixToShow = ACTIVE_MATRIX;
+  const modeLabel = ACTIVE_ATTRS ? 'Selected-features matrix' : 'Default precomputed matrix';
+  const short = (s, n = 14) => (s.length <= n ? s : `${s.slice(0, n - 3)}...`);
+  const header = COUNTRIES.map(c => `<th>${short(c.replace(/_/g,' '), 13)}</th>`).join('');
+  const rows = COUNTRIES.map((r, i) => {
+    const cells = COUNTRIES.map((_, j) => {
+      const v = Number(matrixToShow[i][j] ?? 0);
+      return `<td style="background:${matrixCellColor(i, j)}" title="${v.toFixed(4)}">${v.toFixed(4)}</td>`;
+    }).join('');
+    return `<tr><td class="matrix-row-h">${short(r.replace(/_/g,' '), 20)}</td>${cells}</tr>`;
+  }).join('');
+
+  content.innerHTML = `
+    <table class="matrix-table">
+      <thead><tr><th class="matrix-row-h matrix-corner">Country</th>${header}</tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+  status.textContent = `Showing ${COUNTRIES.length} × ${COUNTRIES.length} matrix (${modeLabel}). Values are similarity decimals (0 to 1).`;
+}
+
+function openMatrixOverlay() {
+  const overlay = document.getElementById('matrix-overlay');
+  if (!overlay) return;
+  renderMatrixOverlay();
+  overlay.style.display = 'flex';
+  overlay.setAttribute('aria-hidden', 'false');
+}
+
+function closeMatrixOverlay() {
+  const overlay = document.getElementById('matrix-overlay');
+  if (!overlay) return;
+  overlay.style.display = 'none';
+  overlay.setAttribute('aria-hidden', 'true');
+}
 
 // ─── Load data ────────────────────────────────────────────────────────────────
 async function loadData() {
@@ -266,6 +407,7 @@ async function loadData() {
   MATRIX        = data.matrix;
   N             = COUNTRIES.length;
   ACTIVE_MATRIX = MATRIX;
+  populateCountrySearchList();
 
   document.getElementById('loading-msg').textContent = 'Loading country trees…';
   await tick();
@@ -816,6 +958,10 @@ async function run() {
   const sil = silhouette(asgn);
   const db  = daviesBouldin(asgn);
 
+  LAST_ASSIGNMENTS = asgn;
+  LAST_CLUSTERS = clusters;
+  updateCountryClusterLookup();
+
   document.getElementById('stat-k').textContent          = k;
   document.getElementById('stat-sil').textContent        = sil.toFixed(4);
   document.getElementById('stat-db').textContent         = db.toFixed(4);
@@ -1090,18 +1236,31 @@ document.querySelectorAll('input[name="algo"]').forEach(r =>
   })
 );
 
-document.getElementById('hac-linkage').addEventListener('change', function () {
+function bindIfExists(id, event, handler) {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener(event, handler);
+}
+
+bindIfExists('hac-linkage', 'change', function () {
   initCutSlider(this.value);
 });
 
-document.getElementById('cut-slider').addEventListener('input', function () {
-  const linkage = document.getElementById('hac-linkage').value;
+bindIfExists('cut-slider', 'input', function () {
+  const linkageEl = document.getElementById('hac-linkage');
+  if (!linkageEl) return;
+  const linkage = linkageEl.value;
   const hacRes  = hacCache[linkage];
   if (hacRes) updateCutBadges(hacRes, +this.value);
 });
 
-document.getElementById('run-btn').addEventListener('click', run);
-document.getElementById('elbow-btn').addEventListener('click', runElbow);
+bindIfExists('run-btn', 'click', run);
+bindIfExists('elbow-btn', 'click', runElbow);
+bindIfExists('show-matrix-btn', 'click', openMatrixOverlay);
+bindIfExists('close-matrix-btn', 'click', closeMatrixOverlay);
+bindIfExists('matrix-overlay', 'click', (e) => {
+  if (e.target.id === 'matrix-overlay') closeMatrixOverlay();
+});
+bindIfExists('cluster-country-search', 'input', updateCountryClusterLookup);
 
 // Feature mode toggle
 document.querySelectorAll('input[name="feat-mode"]').forEach(r =>

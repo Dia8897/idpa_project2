@@ -512,6 +512,51 @@ button:hover { background: #75c6ec; border-color: #63b8e0; }
 .score-value { font-size: 3rem; font-weight: 800; color: var(--text); margin: 8px 0 4px; }
 .score-sub { margin: 0; color: var(--muted); }
 
+.matrix-wrap { margin-top: 10px; }
+.matrix-scroll {
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  max-height: 460px;
+}
+.matrix-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  min-width: 860px;
+  width: max-content;
+  font-size: 0.78rem;
+}
+.matrix-table th,
+.matrix-table td {
+  padding: 6px 8px;
+  border-right: 1px solid #ffffff;
+  border-bottom: 1px solid #ffffff;
+  text-align: center;
+  white-space: nowrap;
+}
+.matrix-corner,
+.matrix-row-h,
+.matrix-col-h {
+  background: #f8fafc;
+  color: #334155;
+  font-weight: 700;
+}
+.matrix-corner,
+.matrix-row-h {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+}
+.matrix-col-h,
+.matrix-corner {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+}
+.matrix-cell { color: #0f172a; font-variant-numeric: tabular-nums; }
+.matrix-hl { outline: 2px solid #1d4ed8; outline-offset: -2px; }
+.matrix-cell-selected { box-shadow: inset 0 0 0 2px #0f172a; font-weight: 700; }
+
 .table { width: 100%; border-collapse: collapse; font-size: 0.9rem; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(30, 58, 138, 0.06); }
 .table th, .table td { border-bottom: 1px solid var(--line); text-align: left; padding: 12px; vertical-align: top; }
 .table th { background: var(--panel-soft); font-weight: 600; color: var(--text); position: sticky; top: 0; z-index: 1; }

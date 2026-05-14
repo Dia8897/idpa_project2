@@ -68,7 +68,76 @@ const els = {
   postInfoboxBtn: document.getElementById("postInfoboxBtn"),
   patchStatus: document.getElementById("patchStatus"),
   postprocessContent: document.getElementById("postprocessContent"),
+  matrixStatus: document.getElementById("matrixStatus"),
+  matrixContainer: document.getElementById("matrixContainer"),
 };
+
+let similarityMatrixData = null;
+
+function matrixColor(v) {
+  const value = Math.max(0, Math.min(1, Number(v) || 0));
+  const hue = 220 - Math.round(value * 90); // blue -> green-ish
+  const light = 96 - Math.round(value * 38);
+  return `hsl(${hue} 85% ${light}%)`;
+}
+
+async function loadSimilarityMatrix() {
+  const res = await fetch(`${DATA_ROOT}/similarity_matrix.json`);
+  if (!res.ok) throw new Error("Failed to load data/similarity_matrix.json");
+  return res.json();
+}
+
+function renderSimilarityMatrix() {
+  if (!els.matrixContainer || !els.matrixStatus) return;
+  if (!similarityMatrixData || !Array.isArray(similarityMatrixData.countries) || !Array.isArray(similarityMatrixData.matrix)) {
+    els.matrixStatus.textContent = "Similarity matrix unavailable.";
+    els.matrixContainer.innerHTML = "";
+    return;
+  }
+
+  const countries = similarityMatrixData.countries;
+  const matrix = similarityMatrixData.matrix;
+  const source = els.sourceSelect?.value;
+  const target = els.targetSelect?.value;
+
+  const header = countries.map((c) => `<th class="matrix-col-h${c === source || c === target ? " matrix-hl" : ""}">${escapeHtml(shortLabel(c, 12))}</th>`).join("");
+
+  const body = countries
+    .map((rowCountry, i) => {
+      const rowHl = rowCountry === source || rowCountry === target;
+      const cells = countries
+        .map((colCountry, j) => {
+          const value = Number(matrix?.[i]?.[j] ?? 0);
+          const selected = rowCountry === source && colCountry === target;
+          const symmetric = rowCountry === target && colCountry === source;
+          const cls = selected || symmetric ? " matrix-cell matrix-cell-selected" : "matrix-cell";
+          return `<td class="${cls}" style="background:${matrixColor(value)}" title="${escapeHtml(rowCountry)} ↔ ${escapeHtml(colCountry)}: ${(value * 100).toFixed(2)}%">${(value * 100).toFixed(1)}</td>`;
+        })
+        .join("");
+      return `<tr><th class="matrix-row-h${rowHl ? " matrix-hl" : ""}">${escapeHtml(shortLabel(rowCountry, 18))}</th>${cells}</tr>`;
+    })
+    .join("");
+
+  els.matrixContainer.innerHTML = `
+    <div class="matrix-scroll">
+      <table class="matrix-table">
+        <thead><tr><th class="matrix-corner">Country</th>${header}</tr></thead>
+        <tbody>${body}</tbody>
+      </table>
+    </div>
+  `;
+
+  if (source && target) {
+    const i = countries.indexOf(source);
+    const j = countries.indexOf(target);
+    if (i >= 0 && j >= 0) {
+      const v = Number(matrix?.[i]?.[j] ?? 0);
+      els.matrixStatus.textContent = `Matrix similarity for ${source} vs ${target}: ${(v * 100).toFixed(2)}%.`;
+      return;
+    }
+  }
+  els.matrixStatus.textContent = `Loaded ${countries.length} countries. Values shown as similarity %.`;
+}
 
 function initModeSelector() {
   const radios = document.querySelectorAll('input[name="mode"]');
@@ -1739,6 +1808,7 @@ async function onCompare() {
       els.patchStatus.textContent = "Run patching to verify whether the patched tree matches the target tree.";
     }
     updateDiffPanel(source, target, opsDisplay);
+    renderSimilarityMatrix();
     window.__lastTarget = target;
     scrollToElement(document.getElementById("similarityCard") || els.scoreValue);
   } catch (err) {
@@ -1905,6 +1975,12 @@ function enablePostprocessButtons() {
 
 async function init() {
   try {
+    try {
+      similarityMatrixData = await loadSimilarityMatrix();
+    } catch (e) {
+      console.warn(e);
+    }
+
     const countries = await loadCountries();
     fillSelect(els.countrySelect, countries);
     fillSelect(els.sourceSelect, countries);
@@ -1934,6 +2010,8 @@ async function init() {
     setupSharedAttrsDropdown();
     els.sourceSelect.addEventListener("change", refreshSharedAttributes);
     els.targetSelect.addEventListener("change", refreshSharedAttributes);
+    els.sourceSelect.addEventListener("change", renderSimilarityMatrix);
+    els.targetSelect.addEventListener("change", renderSimilarityMatrix);
     enableDiffToggle();
     enablePatchPreview();
     enablePostprocessButtons();
@@ -1949,6 +2027,7 @@ async function init() {
     await onCountryChange();
     await refreshSharedAttributes();
     await onCompare();
+    renderSimilarityMatrix();
   } catch (err) {
     document.body.innerHTML = `<pre style="padding:16px">${escapeHtml(String(err))}</pre>`;
   }
