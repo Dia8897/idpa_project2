@@ -27,6 +27,13 @@ const els = {
   sourceSearch: document.getElementById("sourceSearch"),
   targetSearch: document.getElementById("targetSearch"),
   compareBtn: document.getElementById("compareBtn"),
+  similarityMode: document.getElementById("similarityMode"),
+  selectedAttrsControls: document.getElementById("selectedAttrsControls"),
+  sharedAttrsSelect: document.getElementById("sharedAttrsSelect"),
+  sharedAttrsToggle: document.getElementById("sharedAttrsToggle"),
+  sharedAttrsValue: document.getElementById("sharedAttrsValue"),
+  sharedAttrsMenu: document.getElementById("sharedAttrsMenu"),
+  sharedAttrsStatus: document.getElementById("sharedAttrsStatus"),
   toggleDiffBtn: document.getElementById("toggleDiffBtn"),
   patchBtn: document.getElementById("patchBtn"),
   closeDiffBtn: document.getElementById("closeDiffBtn"),
@@ -510,6 +517,102 @@ function countNodes(node) {
   return total;
 }
 
+function getTopLevelAttrMap(treeRoot) {
+  const normalizedRoot = treeRoot?.tree?.children ? treeRoot.tree : treeRoot;
+  const map = new Map();
+  (normalizedRoot?.children || []).forEach((child) => {
+    const key = String(child?.label || "");
+    if (key) map.set(key, child);
+  });
+  return map;
+}
+
+function getSharedTopLevelAttrs(sourceRoot, targetRoot) {
+  const a = getTopLevelAttrMap(sourceRoot);
+  const b = getTopLevelAttrMap(targetRoot);
+  return [...a.keys()].filter((k) => b.has(k)).sort((x, y) => x.localeCompare(y));
+}
+
+function populateSharedAttrsSelect(attrs) {
+  if (!els.sharedAttrsMenu) return;
+  const prevSelected = new Set(getSelectedSharedAttrs());
+  if (!attrs || attrs.length === 0) {
+    els.sharedAttrsMenu.innerHTML = '<div class="multi-dropdown-option" aria-disabled="true">(No shared attributes for this pair)</div>';
+    if (els.sharedAttrsValue) els.sharedAttrsValue.textContent = "No shared attributes";
+    if (els.sharedAttrsStatus) {
+      els.sharedAttrsStatus.textContent = "Shared attributes found: 0";
+    }
+    return;
+  }
+  els.sharedAttrsMenu.innerHTML = attrs
+    .map((attr) => {
+      const selected = prevSelected.has(attr) ? " checked" : "";
+      return `<label class="multi-dropdown-option"><input type="checkbox" value="${escapeHtml(attr)}"${selected} /> <span>${escapeHtml(attr)}</span></label>`;
+    })
+    .join("");
+  updateSharedAttrsSummary();
+  if (els.sharedAttrsStatus) {
+    els.sharedAttrsStatus.textContent = `Shared attributes found: ${attrs.length}`;
+  }
+}
+
+function getSelectedSharedAttrs() {
+  if (!els.sharedAttrsMenu) return [];
+  return Array.from(els.sharedAttrsMenu.querySelectorAll('input[type="checkbox"]:checked')).map((o) => o.value);
+}
+
+function updateSharedAttrsSummary() {
+  if (!els.sharedAttrsValue) return;
+  const selected = getSelectedSharedAttrs();
+  if (!selected.length) {
+    els.sharedAttrsValue.textContent = "Select shared attributes";
+  } else {
+    els.sharedAttrsValue.textContent = selected.join(", ");
+  }
+}
+
+function closeSharedAttrsDropdown() {
+  if (!els.sharedAttrsSelect) return;
+  els.sharedAttrsSelect.classList.remove("open");
+  els.sharedAttrsSelect.setAttribute("aria-expanded", "false");
+}
+
+function openSharedAttrsDropdown() {
+  if (!els.sharedAttrsSelect) return;
+  els.sharedAttrsSelect.classList.add("open");
+  els.sharedAttrsSelect.setAttribute("aria-expanded", "true");
+}
+
+function setupSharedAttrsDropdown() {
+  if (!els.sharedAttrsSelect || !els.sharedAttrsToggle || !els.sharedAttrsMenu) return;
+  els.sharedAttrsToggle.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const isOpen = els.sharedAttrsSelect.classList.contains("open");
+    if (isOpen) closeSharedAttrsDropdown();
+    else openSharedAttrsDropdown();
+  });
+
+  els.sharedAttrsMenu.addEventListener("change", async (e) => {
+    if (e.target && e.target.matches('input[type="checkbox"]')) {
+      updateSharedAttrsSummary();
+      closeSharedAttrsDropdown();
+    }
+  });
+
+  document.addEventListener("click", (e) => {
+    if (!els.sharedAttrsSelect.contains(e.target)) closeSharedAttrsDropdown();
+  });
+}
+
+function buildTreeFromSelectedTopLevelAttrs(treeRoot, selectedAttrs) {
+  const selected = new Set((selectedAttrs || []).map((s) => String(s)));
+  const clonedRoot = cloneNode(treeRoot);
+  clonedRoot.children = (treeRoot?.children || [])
+    .filter((child) => selected.has(String(child?.label || "")))
+    .map(cloneNode);
+  return clonedRoot;
+}
+
 function shortLabel(label, max = 14) {
   const t = String(label);
   if (t.length <= max) return t;
@@ -911,6 +1014,34 @@ function nodeLabel(node) {
   return String(node.label || "");
 }
 
+function parseNumericValue(raw) {
+  if (raw == null) return null;
+  const text = String(raw).trim();
+  if (!text) return null;
+
+  // Keep digits, sign, decimal separators, exponent, and percent mark.
+  const cleaned = text.replace(/,/g, "").match(/[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?%?/);
+  if (!cleaned) return null;
+
+  const token = cleaned[0];
+  const isPercent = token.endsWith("%");
+  const numericPart = isPercent ? token.slice(0, -1) : token;
+  const value = Number.parseFloat(numericPart);
+  if (!Number.isFinite(value)) return null;
+  return value;
+}
+
+function numericLeafUpdateCost(labelA, labelB) {
+  const a = parseNumericValue(labelA);
+  const b = parseNumericValue(labelB);
+  if (a == null || b == null) return null;
+
+  // Relative graded penalty in [0,1]: close numbers => smaller update cost.
+  const scale = Math.max(Math.abs(a), Math.abs(b), 1);
+  const relativeDiff = Math.abs(a - b) / scale;
+  return Math.max(0, Math.min(1, relativeDiff));
+}
+
 function joinPath(path, label) {
   if (!path) return `/${label}`;
   return `${path}/${label}`;
@@ -968,7 +1099,11 @@ function makeTedContext(sourceTree, targetTree) {
 
   function costUpdRoot(a, b) {
     if (nodeLabel(a) === nodeLabel(b)) return 0;
-    if (isLeaf(a) && isLeaf(b)) return 1;
+    if (isLeaf(a) && isLeaf(b)) {
+      const gradedNumeric = numericLeafUpdateCost(nodeLabel(a), nodeLabel(b));
+      if (gradedNumeric != null) return gradedNumeric;
+      return 1;
+    }
     return costDelTree(a) + costInsTree(b);
   }
 
@@ -1547,20 +1682,43 @@ async function onCompare() {
     annotateTreeIds(tDisplay.tree);
     annotateTreeIds(sTed.tree);
     annotateTreeIds(tTed.tree);
-    const opsDisplay = buildEditScript(sDisplay.tree, tDisplay.tree); // readable diff
-    const opsToken = buildEditScript(sTed.tree, tTed.tree); // tokenized diff for TED
-    const tedMetrics = computeTedMetrics(sTed.tree, tTed.tree);
+    const sharedAttrs = getSharedTopLevelAttrs(sDisplay.tree, tDisplay.tree);
+    populateSharedAttrsSelect(sharedAttrs);
+
+    const mode = els.similarityMode?.value || "whole";
+    const selectedAttrs = mode === "selected" ? getSelectedSharedAttrs() : [];
+    const useSelected = mode === "selected";
+
+    const displaySourceForCompare = useSelected
+      ? buildTreeFromSelectedTopLevelAttrs(sDisplay.tree, selectedAttrs)
+      : sDisplay.tree;
+    const displayTargetForCompare = useSelected
+      ? buildTreeFromSelectedTopLevelAttrs(tDisplay.tree, selectedAttrs)
+      : tDisplay.tree;
+    const tedSourceForCompare = useSelected
+      ? buildTreeFromSelectedTopLevelAttrs(sTed.tree, selectedAttrs)
+      : sTed.tree;
+    const tedTargetForCompare = useSelected
+      ? buildTreeFromSelectedTopLevelAttrs(tTed.tree, selectedAttrs)
+      : tTed.tree;
+
+    const opsDisplay = buildEditScript(displaySourceForCompare, displayTargetForCompare); // readable diff
+    const opsToken = buildEditScript(tedSourceForCompare, tedTargetForCompare); // tokenized diff for TED
+    const tedMetrics = computeTedMetrics(tedSourceForCompare, tedTargetForCompare);
     const nodeMaps = buildNodeTransformMaps(opsDisplay);
-    renderTransform.sourceNodeCount = countNodes(sTed.tree);
-    renderTransform.targetNodeCount = countNodes(tTed.tree);
-    window.__lastSourceDisplay = sDisplay.tree;
-    window.__lastTargetDisplay = tDisplay.tree;
-    window.__lastSourceTed = sTed.tree;
-    window.__lastTargetTed = tTed.tree;
+    renderTransform.sourceNodeCount = countNodes(tedSourceForCompare);
+    renderTransform.targetNodeCount = countNodes(tedTargetForCompare);
+    window.__lastSourceDisplay = displaySourceForCompare;
+    window.__lastTargetDisplay = displayTargetForCompare;
+    window.__lastSourceTed = tedSourceForCompare;
+    window.__lastTargetTed = tedTargetForCompare;
     window.__lastNodeMaps = nodeMaps;
     window.__lastTedMetrics = tedMetrics;
     renderComparisonTrees();
     renderTransform(opsDisplay, opsToken, tedMetrics); // readable cards + TED metrics from tested recurrence
+    if (els.scoreExplain && useSelected) {
+      els.scoreExplain.textContent += ` Computed on selected shared attributes (${selectedAttrs.length}).`;
+    }
     applyTreeViewMode();
 
     window.__lastOps = opsDisplay; // for diff overlay + patch (readable)
@@ -1596,7 +1754,36 @@ async function onCompare() {
     if (els.postXmlBtn) els.postXmlBtn.disabled = true;
     if (els.postInfoboxBtn) els.postInfoboxBtn.disabled = true;
     if (els.diffOverlay) els.diffOverlay.style.display = "none";
+    if (els.sharedAttrsStatus) els.sharedAttrsStatus.textContent = "Shared attributes found: error while comparing";
   }
+}
+
+async function refreshSharedAttributes() {
+  const source = els.sourceSelect.value;
+  const target = els.targetSelect.value;
+  if (!source || !target) return;
+  try {
+    const [sDisplay, tDisplay] = await Promise.all([
+      loadTreeByCountry(source, DISPLAY_TREE_DIR),
+      loadTreeByCountry(target, DISPLAY_TREE_DIR),
+    ]);
+    const sharedAttrs = getSharedTopLevelAttrs(sDisplay, tDisplay);
+    populateSharedAttrsSelect(sharedAttrs);
+  } catch (_) {
+    if (els.sharedAttrsMenu) {
+      els.sharedAttrsMenu.innerHTML = '<div class="multi-dropdown-option" aria-disabled="true">(Failed to load shared attributes)</div>';
+    }
+    if (els.sharedAttrsValue) els.sharedAttrsValue.textContent = "Failed to load";
+    if (els.sharedAttrsStatus) {
+      els.sharedAttrsStatus.textContent = "Shared attributes found: failed to load";
+    }
+  }
+}
+
+function updateSelectedAttrsVisibility() {
+  if (!els.selectedAttrsControls || !els.similarityMode) return;
+  const selectedMode = els.similarityMode.value === "selected";
+  els.selectedAttrsControls.style.display = selectedMode ? "grid" : "none";
 }
 
 function buildDiffPayload(source, target, ops) {
@@ -1737,6 +1924,16 @@ async function init() {
     els.countrySelect.addEventListener("change", onCountryChange);
     if (els.viewMode) els.viewMode.addEventListener("change", onCountryChange);
     els.compareBtn.addEventListener("click", onCompare);
+    if (els.similarityMode) {
+      els.similarityMode.addEventListener("change", async () => {
+        updateSelectedAttrsVisibility();
+        await refreshSharedAttributes();
+        await onCompare();
+      });
+    }
+    setupSharedAttrsDropdown();
+    els.sourceSelect.addEventListener("change", refreshSharedAttributes);
+    els.targetSelect.addEventListener("change", refreshSharedAttributes);
     enableDiffToggle();
     enablePatchPreview();
     enablePostprocessButtons();
@@ -1747,8 +1944,10 @@ async function init() {
     initModeSelector();
     initViewMode();
     initResizableSplits();
+    updateSelectedAttrsVisibility();
 
     await onCountryChange();
+    await refreshSharedAttributes();
     await onCompare();
   } catch (err) {
     document.body.innerHTML = `<pre style="padding:16px">${escapeHtml(String(err))}</pre>`;

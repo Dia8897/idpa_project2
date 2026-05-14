@@ -87,6 +87,29 @@
             <button id="toggleDiffBtn" type="button" class="btn" disabled>Show Diff</button>
           </div>
         </div>
+        <div class="controls compare-inline compare-advanced-mode">
+          <div>
+            <label for="similarityMode">Similarity Mode</label>
+            <select id="similarityMode">
+              <option value="whole" selected>Whole Tree</option>
+              <option value="selected">Selected Shared Attributes</option>
+            </select>
+          </div>
+        </div>
+        <div id="selectedAttrsControls" class="controls compare-inline compare-advanced" style="display:none;">
+          <div class="shared-attrs-wrap">
+            <label for="sharedAttrsSelect">Shared attributes (top-level)</label>
+            <div id="sharedAttrsSelect" class="multi-dropdown" role="combobox" aria-haspopup="listbox" aria-expanded="false">
+              <button id="sharedAttrsToggle" type="button" class="multi-dropdown-toggle">
+                <span id="sharedAttrsValue">Select shared attributes</span>
+              </button>
+              <div id="sharedAttrsMenu" class="multi-dropdown-menu" role="listbox" aria-multiselectable="true"></div>
+            </div>
+            <small class="helper-text">Shown only if present in both countries.</small>
+            <small id="sharedAttrsStatus" class="status-text"></small>
+          </div>
+          <div class="btn-group align-end"></div>
+        </div>
       </div>
 
       <div class="summary-grid">
@@ -199,6 +222,6 @@
     </div>
   </div>
 
-  <script src="./app.js"></script>
+  <script src="./app.js?v=20260514-2"></script>
 </body>
 </html>
