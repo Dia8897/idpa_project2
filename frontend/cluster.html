@@ -342,13 +342,36 @@
 <script>
 "use strict";
 
+function applyEmbedMode() {
+  const params = new URLSearchParams(window.location.search);
+  const isEmbed = params.get('embed') === '1';
+  if (!isEmbed) return;
+
+  // Hide standalone navigation/header when rendered inside app.html tab iframe
+  const nav = document.querySelector('nav.navbar');
+  if (nav) nav.style.display = 'none';
+
+  const app = document.getElementById('app');
+  if (app) {
+    app.classList.remove('container-fluid');
+    app.classList.add('container');
+    app.style.paddingTop = '0.5rem';
+  }
+
+  const intro = document.querySelector('#app .container-xl > .mb-4');
+  if (intro) intro.style.display = 'none';
+}
+
+applyEmbedMode();
+
 // ─── State ───────────────────────────────────────────────────────────────────
 let COUNTRIES = [], MATRIX = [], N = 0;
 let mdsCoords     = null;   // active MDS projection
 let fullMdsCoords = null;   // MDS on full precomputed matrix (never changes)
 let hacCache      = {};     // linkage -> {merges, n}
 // Feature-based clustering
-let TREES         = [];     // raw tree objects (lazy-loaded)
+let TREES_TOK     = [];     // tokenized trees for TED/similarity recomputation
+let TREES_RAW     = [];     // non-tokenized trees for human-readable stats
 let FEAT_MATRIX   = null;   // feature-specific similarity matrix
 let ACTIVE_MATRIX = null;   // points to MATRIX or FEAT_MATRIX
 let ACTIVE_ATTRS  = null;   // Set of selected attribute labels, or null in full-tree mode
@@ -552,6 +575,22 @@ async function loadData() {
   document.getElementById('loading').style.display = 'none';
   document.getElementById('app').classList.remove('d-none');
   run();
+}
+
+function showClusterBootError(err) {
+  const loading = document.getElementById('loading');
+  const app = document.getElementById('app');
+  const msg = (err && err.message) ? err.message : String(err || 'Unknown error');
+  if (loading) {
+    loading.innerHTML = `
+      <div class="text-center" style="max-width:760px;padding:16px;">
+        <div class="fw-bold text-danger mb-2">Failed to load clustering page</div>
+        <div class="text-muted small mb-2">Please refresh the page. If this keeps happening, check browser console/network.</div>
+        <pre style="white-space:pre-wrap;text-align:left;background:#fff3f3;border:1px solid #f5c2c7;border-radius:6px;padding:10px;color:#842029;">${msg.replace(/[<>&]/g, s => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[s]))}</pre>
+      </div>
+    `;
+  }
+  if (app) app.classList.remove('d-none');
 }
 
 // Yield to the browser so the loading message updates
@@ -947,7 +986,7 @@ function renderDendrogram(hacResult, cut, cutLineAt) {
 
 // ─── Cluster feature profile ──────────────────────────────────────────────────
 function clusterFeatureProfile(members) {
-  if (!TREES.length) return null;
+  if (!TREES_RAW.length) return null;
 
   // In feature mode use only the selected attrs; in full-tree mode scan everything
   let attrsToCheck;
@@ -955,21 +994,21 @@ function clusterFeatureProfile(members) {
     attrsToCheck = [...ACTIVE_ATTRS];
   } else {
     const attrSet = new Set();
-    members.forEach(idx => (TREES[idx].children || []).forEach(c => attrSet.add(nodeLabel(c))));
+    members.forEach(idx => (TREES_RAW[idx].children || []).forEach(c => attrSet.add(nodeLabel(c))));
     attrsToCheck = [...attrSet];
   }
 
   const results = [];
   for (const attr of attrsToCheck) {
     const present = members.filter(idx =>
-      (TREES[idx].children || []).some(c => nodeLabel(c) === attr)
+      (TREES_RAW[idx].children || []).some(c => nodeLabel(c) === attr)
     );
     if (!present.length) continue;
 
     // Collect leaf values from this subtree across present cluster members
     const freq = new Map();
     for (const idx of present) {
-      const child = (TREES[idx].children || []).find(c => nodeLabel(c) === attr);
+      const child = (TREES_RAW[idx].children || []).find(c => nodeLabel(c) === attr);
       const collect = n => {
         if (isLeaf(n)) freq.set(nodeLabel(n), (freq.get(nodeLabel(n)) || 0) + 1);
         else (n.children || []).forEach(collect);
@@ -1364,15 +1403,17 @@ function filterTree(tree, selectedSet) {
 }
 
 async function loadAllTrees() {
-  const data = await Promise.all(
-    COUNTRIES.map(name => fetch(`../data/trees_tokens/${name}.json`).then(r => r.json()))
-  );
-  TREES = data.map(d => sortTree(d.tree));
+  const [tokData, rawData] = await Promise.all([
+    Promise.all(COUNTRIES.map(name => fetch(`../data/trees_tokens/${name}.json`).then(r => r.json()))),
+    Promise.all(COUNTRIES.map(name => fetch(`../data/trees/${name}.json`).then(r => r.json())))
+  ]);
+  TREES_TOK = tokData.map(d => sortTree(d.tree));
+  TREES_RAW = rawData.map(d => sortTree(d.tree));
 }
 
 function buildAttrPicker() {
   const freq = new Map();
-  TREES.forEach(tree =>
+  TREES_TOK.forEach(tree =>
     (tree.children || []).forEach(child => {
       const lbl = nodeLabel(child);
       freq.set(lbl, (freq.get(lbl) || 0) + 1);
@@ -1404,7 +1445,7 @@ function updateFeatSummary() {
     return;
   }
   const sel = new Set(checked.map(cb => cb.value));
-  const cov = TREES.filter(t => (t.children || []).some(c => sel.has(nodeLabel(c)))).length;
+  const cov = TREES_TOK.filter(t => (t.children || []).some(c => sel.has(nodeLabel(c)))).length;
   document.getElementById('feat-summary').textContent =
     `${checked.length} attribute${checked.length > 1 ? 's' : ''} selected — ${cov}/${N} countries have data`;
 }
@@ -1414,9 +1455,9 @@ async function computeFeatureMatrix(selectedSet) {
   const progBar  = document.getElementById('feat-progress-bar');
   const progText = document.getElementById('feat-progress-text');
   for (let i = 0; i < N; i++) {
-    const ti = filterTree(TREES[i], selectedSet);
+    const ti = filterTree(TREES_TOK[i], selectedSet);
     for (let j = i + 1; j < N; j++) {
-      const sim = computeTedSim(ti, filterTree(TREES[j], selectedSet));
+      const sim = computeTedSim(ti, filterTree(TREES_TOK[j], selectedSet));
       mat[i][j] = mat[j][i] = sim;
     }
     // Yield after every country so the browser repaints the progress bar
@@ -1542,7 +1583,7 @@ document.getElementById('feat-compute-btn').addEventListener('click', async () =
   document.getElementById('hac-cut-params').classList.toggle('d-none', !isHAC);
 })();
 
-loadData();
+loadData().catch(showClusterBootError);
 </script>
 </body>
 </html>

@@ -1,4 +1,4 @@
-const DATA_ROOT = "/data";
+const DATA_ROOT = "../data";
 const DISPLAY_TREE_DIR = "trees"; // non-token trees for UI
 const TED_TREE_DIR = "trees_tokens"; // tokenized trees for similarity
 // for trees: onCompare(): loads 2 trees, builds the edit scripts and computes the TED metrics
@@ -147,6 +147,9 @@ function initModeSelector() {
     pages.forEach((page) => {
       page.classList.toggle('active', page.id === `page-${mode}`);
     });
+    if (mode === 'clustering') {
+      initClustering();
+    }
   };
 
   radios.forEach((radio) => {
@@ -2040,6 +2043,11 @@ async function init() {
   } catch (err) {
     document.body.innerHTML = `<pre style="padding:16px">${escapeHtml(String(err))}</pre>`;
   }
+}
+
+function initClustering() {
+  // Placeholder for clustering initialization
+  console.log('Clustering mode activated');
 }
 
 init();
