@@ -11,6 +11,10 @@ _ACTIVE_SOURCE_SUBTREES = frozenset()
 _ACTIVE_TARGET_SUBTREES = frozenset()
 
 
+def round3(value: float) -> float:
+    return round(float(value), 3)
+
+
 def load_tree(path: Path):
     with open(path, "r", encoding="utf-8") as f:
         tree = json.load(f)["tree"]
@@ -208,10 +212,10 @@ def ted_distance(tree1: dict, tree2: dict):
 
     size1 = subtree_size(tree1)
     size2 = subtree_size(tree2)
-    distance = ted(serialize_node(tree1), serialize_node(tree2))
-    similarity = normalized_similarity(distance, size1, size2)
-    similarity_formula1 = slide_similarity_formula1(distance)
-    common_score = (size1 + size2 - distance) / 2
+    distance = round3(ted(serialize_node(tree1), serialize_node(tree2)))
+    similarity = round3(normalized_similarity(distance, size1, size2))
+    similarity_formula1 = round3(slide_similarity_formula1(distance))
+    common_score = round3((size1 + size2 - distance) / 2)
 
     return {
         "tree_dir": str(DEFAULT_TREE_DIR),
@@ -252,5 +256,5 @@ if __name__ == "__main__":
     print("Size1:", result["size1"], "| Size2:", result["size2"])
     print("Distance:", result["distance"])
     print("Common score:", result["common_score"])
-    print("Slide similarity formula 1:", round(result["slide_similarity_formula1"], 4))
-    print("Normalized similarity:", round(result["normalized_similarity"], 4))
+    print("Slide similarity formula 1:", f"{result['slide_similarity_formula1']:.3f}")
+    print("Normalized similarity:", f"{result['normalized_similarity']:.3f}")

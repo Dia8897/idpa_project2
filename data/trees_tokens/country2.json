@@ -1,0 +1,20 @@
+{
+  "country_name": "TestB",
+  "tree": {
+    "label": "country",
+    "children": [
+      {
+        "label": "tax_rate",
+        "children": [
+          { "label": "50", "children": [] }
+        ]
+      },
+      {
+        "label": "population",
+        "children": [
+          { "label": "1,100,000", "children": [] }
+        ]
+      }
+    ]
+  }
+}

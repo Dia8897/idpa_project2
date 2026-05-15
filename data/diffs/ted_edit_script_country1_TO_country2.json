@@ -1,0 +1,49 @@
+{
+  "algorithm": "Subtree-DP ordered TED",
+  "tree_dir": "data\\trees_tokens",
+  "source": "country1",
+  "target": "country2",
+  "ted": {
+    "distance": 0.19090909090909092,
+    "common_score": 4.904545454545454,
+    "slide_similarity_formula1": 0.8396946564885496,
+    "normalized_similarity": 0.980909090909091
+  },
+  "operation_counts": {
+    "total": 2,
+    "delete": 0,
+    "insert": 0,
+    "update": 2
+  },
+  "operations": [
+    {
+      "kind": "UPD",
+      "path": "/country/tax_rate",
+      "old": "45%",
+      "new": "50",
+      "node_is_leaf": true,
+      "child_index": null,
+      "subtree": {
+        "label": "50",
+        "children": []
+      }
+    },
+    {
+      "kind": "UPD",
+      "path": "/country/population",
+      "old": "1,000,000",
+      "new": "1,100,000",
+      "node_is_leaf": true,
+      "child_index": null,
+      "subtree": {
+        "label": "1,100,000",
+        "children": []
+      }
+    }
+  ],
+  "execution_order": {
+    "delete_first": true,
+    "insert_second": true,
+    "update_third": true
+  }
+}

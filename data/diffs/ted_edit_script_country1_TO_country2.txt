@@ -1,0 +1,33 @@
+COUNTRY TRANSFORMATION EDIT SCRIPT
+=================================
+Source: country1
+Target: country2
+Total operations: 2
+Delete operations: 0
+Insert operations: 0
+Update operations: 2
+
+EXECUTION ORDER
+---------------
+1) Apply all deletes.
+2) Apply all inserts.
+3) Apply all updates.
+
+PHASE 1 - DELETE SOURCE-ONLY DATA
+=================================
+No operations in this section.
+
+PHASE 2 - INSERT TARGET-ONLY DATA
+=================================
+No operations in this section.
+
+PHASE 3 - UPDATE SHARED DATA
+============================
+[UPD-001] PATH /country/population
+Reason: Update token/content value.
+Action: update `1,000,000` -> `1,100,000`
+
+[UPD-002] PATH /country/tax_rate
+Reason: Update token/content value.
+Action: update `45%` -> `50`
+

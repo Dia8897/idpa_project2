@@ -452,8 +452,8 @@ if __name__ == "__main__":
     ted_metrics = td.ted_distance(tree1, tree2)
     summarize_ops(ops, max_show=args.max_show)
     print("TED:", ted_metrics["distance"])
-    print("Slide similarity formula 1:", round(ted_metrics["slide_similarity_formula1"], 4))
-    print("Normalized similarity:", round(ted_metrics["normalized_similarity"], 4))
+    print("Slide similarity formula 1:", f"{ted_metrics['slide_similarity_formula1']:.3f}")
+    print("Normalized similarity:", f"{ted_metrics['normalized_similarity']:.3f}")
 
     stem = f"ted_edit_script_{Path(source_name).stem}_TO_{Path(target_name).stem}"
     args.out_dir.mkdir(parents=True, exist_ok=True)

@@ -111,7 +111,7 @@ function renderSimilarityMatrix() {
           const selected = rowCountry === source && colCountry === target;
           const symmetric = rowCountry === target && colCountry === source;
           const cls = selected || symmetric ? " matrix-cell matrix-cell-selected" : "matrix-cell";
-          return `<td class="${cls}" style="background:${matrixColor(value)}" title="${escapeHtml(rowCountry)} ↔ ${escapeHtml(colCountry)}: ${(value * 100).toFixed(2)}%">${(value * 100).toFixed(1)}</td>`;
+          return `<td class="${cls}" style="background:${matrixColor(value)}" title="${escapeHtml(rowCountry)} ↔ ${escapeHtml(colCountry)}: ${(value * 100).toFixed(3)}%">${(value * 100).toFixed(3)}</td>`;
         })
         .join("");
       return `<tr><th class="matrix-row-h${rowHl ? " matrix-hl" : ""}">${escapeHtml(shortLabel(rowCountry, 18))}</th>${cells}</tr>`;
@@ -132,7 +132,7 @@ function renderSimilarityMatrix() {
     const j = countries.indexOf(target);
     if (i >= 0 && j >= 0) {
       const v = Number(matrix?.[i]?.[j] ?? 0);
-      els.matrixStatus.textContent = `Matrix similarity for ${source} vs ${target}: ${(v * 100).toFixed(2)}%.`;
+      els.matrixStatus.textContent = `Matrix similarity for ${source} vs ${target}: ${(v * 100).toFixed(3)}%.`;
       return;
     }
   }
@@ -1258,10 +1258,10 @@ function computeTedMetrics(tree1, tree2) {
   const { ted } = makeTedContext(tree1, tree2);
   const size1 = subtreeSize(tree1);
   const size2 = subtreeSize(tree2);
-  const distance = ted(tree1, tree2);
+  const distance = Number(ted(tree1, tree2).toFixed(3));
   const totalNodes = size1 + size2;
-  const normalizedSimilarity = totalNodes ? Math.max(0, 1 - (distance / totalNodes)) : 1;
-  const commonScore = (totalNodes - distance) / 2;
+  const normalizedSimilarity = Number((totalNodes ? Math.max(0, 1 - (distance / totalNodes)) : 1).toFixed(3));
+  const commonScore = Number(((totalNodes - distance) / 2).toFixed(3));
 
   return {
     size1,
@@ -1408,6 +1408,14 @@ function opReason(kind) {
 function isNoiseToken(val) {
   const s = String(val || "").trim();
   return /^[0-9]+$/.test(s);
+}
+
+function isMeaningfulLeafUpdate(op) {
+  if (!op || op.kind !== "UPD" || !op.nodeIsLeaf) return false;
+  const oldVal = String(op.old ?? "").trim();
+  const newVal = String(op.new ?? "").trim();
+  if (!oldVal || !newVal) return false;
+  return oldVal !== newVal;
 }
 
 function opPath(op) {
@@ -1562,11 +1570,16 @@ function opCardReadable(op, idx) {
 function renderTransform(opsForDisplay, opsForTed = opsForDisplay, tedMetrics = null) {
   // Render operation cards from display-level trees (whole words/fields),
   // not token-level trees, so the diff is easier for humans to read.
+  const rawUpdOps = sortOps(opsForDisplay.filter((o) => o.kind === "UPD"));
+
   const visibleOps = opsForDisplay.filter(
     (o) =>
-      !(
-        o.nodeIsLeaf &&
-        ((o.old && isNoiseToken(o.old)) || (o.new && isNoiseToken(o.new)))
+      (
+        isMeaningfulLeafUpdate(o) ||
+        !(
+          o.nodeIsLeaf &&
+          ((o.old && isNoiseToken(o.old)) || (o.new && isNoiseToken(o.new)))
+        )
       )
       && !(o.kind === "UPD" && o.old === o.new)
   );
@@ -1591,7 +1604,7 @@ function renderTransform(opsForDisplay, opsForTed = opsForDisplay, tedMetrics = 
     <div class="stat"><div class="k">Deletes</div><div class="v">${delOps.length}</div></div>
     <div class="stat"><div class="k">Inserts</div><div class="v">${insOps.length}</div></div>
     <div class="stat"><div class="k">Updates</div><div class="v">${updOps.length}</div></div>
-    <div class="stat"><div class="k">TED</div><div class="v">${metrics.distance}</div></div>
+    <div class="stat"><div class="k">TED</div><div class="v">${Number(metrics.distance).toFixed(3)}</div></div>
     <div class="stat"><div class="k">Similarity</div><div class="v">${(metrics.normalizedSimilarity * 100).toFixed(2)}%</div></div>
   `;
 

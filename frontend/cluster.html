@@ -580,7 +580,7 @@ function renderMatrixOverlay() {
   const rows = COUNTRIES.map((r, i) => {
     const cells = COUNTRIES.map((_, j) => {
       const v = Number(matrixToShow[i][j] ?? 0);
-      return `<td style="background:${matrixCellColor(i, j)}" title="${v.toFixed(4)}">${v.toFixed(4)}</td>`;
+      return `<td style="background:${matrixCellColor(i, j)}" title="${v.toFixed(3)}">${v.toFixed(3)}</td>`;
     }).join('');
     return `<tr><td class="matrix-row-h">${short(r.replace(/_/g,' '), 20)}</td>${cells}</tr>`;
   }).join('');
@@ -1229,7 +1229,7 @@ async function run() {
     const threshold = +document.getElementById('cut-slider').value;
     const cut       = hacCutByDistance(hacRes, threshold);
     asgn = cut.assignments; clusters = cut.clusters;
-    extraVal   = threshold.toFixed(4); extraLabel = 'Cut Distance';
+    extraVal   = threshold.toFixed(3); extraLabel = 'Cut Distance';
     document.getElementById('viz-title').textContent    = `Dendrogram (${linkage} linkage)`;
     document.getElementById('viz-subtitle').textContent = 'Leaves colored by cluster. Red dashed line = cut.';
     renderDendrogram(hacRes, cut, threshold);
@@ -1244,8 +1244,8 @@ async function run() {
   updateCountryClusterLookup();
 
   document.getElementById('stat-k').textContent          = k;
-  document.getElementById('stat-sil').textContent        = sil.toFixed(4);
-  document.getElementById('stat-db').textContent         = db.toFixed(4);
+  document.getElementById('stat-sil').textContent        = sil.toFixed(3);
+  document.getElementById('stat-db').textContent         = db.toFixed(3);
   document.getElementById('stat-extra').textContent      = extraVal;
   document.getElementById('stat-extra-label').textContent = extraLabel;
 
@@ -1262,10 +1262,10 @@ async function run() {
     if (ext) {
       document.getElementById('ext-ref-label').textContent =
         GROUND_TRUTH_DATA[refKey].label + ` — ${ext.covered}/${ext.total} countries matched`;
-      document.getElementById('stat-purity').textContent    = ext.purity.toFixed(4);
-      document.getElementById('stat-precision').textContent = ext.precision.toFixed(4);
-      document.getElementById('stat-recall').textContent    = ext.recall.toFixed(4);
-      document.getElementById('stat-fmeasure').textContent  = ext.fmeasure.toFixed(4);
+      document.getElementById('stat-purity').textContent    = ext.purity.toFixed(3);
+      document.getElementById('stat-precision').textContent = ext.precision.toFixed(3);
+      document.getElementById('stat-recall').textContent    = ext.recall.toFixed(3);
+      document.getElementById('stat-fmeasure').textContent  = ext.fmeasure.toFixed(3);
       extRow.classList.remove('d-none');
     }
   } else {
