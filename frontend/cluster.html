@@ -1078,6 +1078,57 @@ function renderClusters(asgn, clusters, medoids) {
   }).join('');
 }
 
+// ─── Save clustering run to MongoDB via Flask API ────────────────────────────
+const DB_API = 'http://localhost:5050';
+
+async function saveClusteringRun(algorithm, assignments, internalMetrics, externalMetrics) {
+  const algo     = document.querySelector('input[name="algo"]:checked').value;
+  const featMode = document.querySelector('input[name="feat-mode"]:checked')?.value || 'all';
+
+  const parameters = { feature_mode: featMode };
+  if (algo === 'kmedoids') {
+    parameters.k    = +document.getElementById('k-slider').value;
+    parameters.seed = +document.getElementById('km-seed').value || 42;
+  } else {
+    parameters.linkage       = document.getElementById('hac-linkage').value;
+    parameters.cut_distance  = +document.getElementById('cut-slider').value;
+  }
+
+  const metrics = { ...internalMetrics };
+  if (externalMetrics) {
+    metrics.purity    = externalMetrics.purity;
+    metrics.precision = externalMetrics.precision;
+    metrics.recall    = externalMetrics.recall;
+    metrics.f_measure = externalMetrics.fmeasure;
+    metrics.reference = document.getElementById('ref-data').value;
+  }
+
+  try {
+    await fetch(`${DB_API}/api/clustering`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ algorithm, parameters, assignments, metrics }),
+    });
+  } catch (_) {
+    // API not running — silently skip, clustering still works
+  }
+}
+
+async function saveFeatureMatrix(selectedAttrs, countries, matrix) {
+  try {
+    await fetch(`${DB_API}/api/matrix`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        type:       'feature',
+        attributes: selectedAttrs,
+        countries:  countries,
+        matrix:     matrix,
+      }),
+    });
+  } catch (_) { /* API not running — skip silently */ }
+}
+
 // ─── Main run ─────────────────────────────────────────────────────────────────
 async function run() {
   const btn = document.getElementById('run-btn');
@@ -1156,6 +1207,11 @@ async function run() {
   }
 
   renderClusters(asgn, clusters, medoids);
+
+  // Save run to MongoDB (fire-and-forget — does not block the UI)
+  const refKey2  = document.getElementById('ref-data').value;
+  const extFinal = refKey2 !== 'none' ? computeExternalMetrics(asgn, getRefLabels(refKey2)) : null;
+  saveClusteringRun(algo, asgn, { silhouette: sil, davies_bouldin: db }, extFinal);
 
   btn.disabled = false; sp.classList.add('d-none');
 }
@@ -1568,6 +1624,9 @@ document.getElementById('feat-compute-btn').addEventListener('click', async () =
   sp.classList.add('d-none');
   prog.classList.add('d-none');
   btn.disabled = false;
+
+  // Save the feature matrix to MongoDB
+  saveFeatureMatrix([...selectedSet], COUNTRIES, FEAT_MATRIX);
 
   run();
 });

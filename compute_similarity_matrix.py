@@ -13,10 +13,17 @@ import json
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from ted_distance import load_tree, ted_distance as compute_ted
+
+try:
+    from db.db_config import get_db
+    _MONGO_AVAILABLE = True
+except Exception:
+    _MONGO_AVAILABLE = False
 
 
 def _worker(args: tuple) -> tuple[int, int, float]:
@@ -31,6 +38,31 @@ def _worker(args: tuple) -> tuple[int, int, float]:
 def _save_json(path: Path, countries: list[str], matrix: list[list[float]]) -> None:
     with open(path, "w", encoding="utf-8") as f:
         json.dump({"countries": countries, "matrix": matrix}, f)
+
+
+def _save_to_mongo(countries, matrix, tree_dir, workers, duration):
+    if not _MONGO_AVAILABLE:
+        return
+    try:
+        db = get_db()
+        doc = {
+            "timestamp":        datetime.now(timezone.utc),
+            "duration_seconds": round(duration, 1),
+            "num_countries":    len(countries),
+            "num_pairs":        len(countries) * (len(countries) - 1) // 2,
+            "parameters": {
+                "tree_dir":      str(tree_dir),
+                "workers":       workers,
+                "sorted_trees":  True,
+                "numeric_costs": True,
+            },
+            "countries": countries,
+            "matrix":    matrix,
+        }
+        db.matrix_computations.insert_one(doc)
+        print(f"Computation saved to MongoDB (matrix_computations).")
+    except Exception as e:
+        print(f"MongoDB save skipped: {e}")
 
 
 def compute_matrix(tree_dir: Path, output_file: Path, workers: int) -> None:
@@ -130,11 +162,14 @@ def compute_matrix(tree_dir: Path, output_file: Path, workers: int) -> None:
             except Exception as e:
                 print(f"  ERROR for pair ({args[0]}, {args[1]}): {e}")
 
+    duration = time.time() - start
     _save_json(output_file, countries, matrix)
-    print(f"\nDone in {time.time() - start:.1f}s. Matrix saved to: {output_file}")
+    print(f"\nDone in {duration:.1f}s. Matrix saved to: {output_file}")
 
     if partial_file.exists():
         partial_file.unlink()
+
+    _save_to_mongo(countries, matrix, tree_dir, workers, duration)
 
 
 if __name__ == "__main__":

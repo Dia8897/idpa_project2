@@ -1,0 +1,7 @@
+-- MongoDB is schema-less: no SQL schema needed.
+-- Collections are created automatically on first insert.
+-- See init_db.py for index setup.
+--
+-- Collections used:
+--   countries  : one document per country (name + both trees embedded)
+--   similarity : one document per pair   (country_a, country_b, score)
