@@ -51,6 +51,32 @@ def list_clustering():
     return jsonify(runs)
 
 
+@app.get("/api/matrix/lookup")
+def lookup_matrix():
+    """
+    Check if a feature matrix with exactly these attributes already exists.
+    Query: /api/matrix/lookup?attrs=gdp_nominal,total,water,...
+    Returns the full matrix doc if found, 404 otherwise.
+    """
+    attrs_param = request.args.get("attrs", "")
+    if not attrs_param:
+        return jsonify({"error": "attrs query param required"}), 400
+
+    requested = sorted(attrs_param.split(","))
+
+    db = get_db()
+    doc = db.matrix_computations.find_one(
+        {"attributes": requested},
+        {"_id": 0}   # exclude _id so JSON serialization is simple
+    )
+    if doc:
+        # convert datetime to string so Flask can serialize it
+        if "timestamp" in doc:
+            doc["timestamp"] = doc["timestamp"].isoformat()
+        return jsonify(doc)
+    return jsonify(None), 404
+
+
 @app.post("/api/matrix")
 def save_matrix():
     body = request.get_json(silent=True)
@@ -72,7 +98,7 @@ def save_matrix():
         "source":      "browser",
         "num_countries": len(countries),
         "num_pairs":   len(countries) * (len(countries) - 1) // 2,
-        "attributes":  attributes,
+        "attributes":  sorted(attributes),
         "countries":   countries,
         "matrix":      matrix,
     }

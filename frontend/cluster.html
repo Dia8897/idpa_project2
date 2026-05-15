@@ -1104,10 +1104,14 @@ async function saveClusteringRun(algorithm, assignments, internalMetrics, extern
   }
 
   try {
+    // Convert array [clusterId, ...] → {countryName: clusterId} for readable MongoDB docs
+    const assignmentsDict = Array.isArray(assignments)
+      ? Object.fromEntries(COUNTRIES.map((name, i) => [name, assignments[i]]))
+      : assignments;
     await fetch(`${DB_API}/api/clustering`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ algorithm, parameters, assignments, metrics }),
+      body:    JSON.stringify({ algorithm, parameters, assignments: assignmentsDict, metrics }),
     });
   } catch (_) {
     // API not running — silently skip, clustering still works
@@ -1609,10 +1613,39 @@ document.getElementById('feat-compute-btn').addEventListener('click', async () =
   sp.classList.remove('d-none');
   prog.classList.remove('d-none');
   document.getElementById('feat-progress-bar').style.width = '0%';
-  document.getElementById('feat-progress-text').textContent = 'Starting…';
+  document.getElementById('feat-progress-text').textContent = 'Checking cache…';
   await tick();
 
-  FEAT_MATRIX   = await computeFeatureMatrix(selectedSet);
+  // Check MongoDB for an already-computed matrix with the same features
+  let loadedFromCache = false;
+  try {
+    const sortedAttrs = [...selectedSet].sort().join(',');
+    const res = await fetch(`${DB_API}/api/matrix/lookup?attrs=${encodeURIComponent(sortedAttrs)}`);
+    if (res.ok) {
+      const cached = await res.json();
+      if (cached && cached.matrix && cached.countries) {
+        // Reorder rows/cols to match current COUNTRIES order
+        const cachedIndex = name => cached.countries.indexOf(name);
+        FEAT_MATRIX = COUNTRIES.map(a =>
+          COUNTRIES.map(b => {
+            const i = cachedIndex(a), j = cachedIndex(b);
+            return (i >= 0 && j >= 0) ? cached.matrix[i][j] : 0;
+          })
+        );
+        loadedFromCache = true;
+        document.getElementById('feat-progress-text').textContent = 'Loaded from cache!';
+      }
+    }
+  } catch (_) { /* API not running — fall through to compute */ }
+
+  if (!loadedFromCache) {
+    document.getElementById('feat-progress-text').textContent = 'Computing…';
+    await tick();
+    FEAT_MATRIX = await computeFeatureMatrix(selectedSet);
+    // Save to MongoDB so next time it's instant
+    saveFeatureMatrix([...selectedSet], COUNTRIES, FEAT_MATRIX);
+  }
+
   ACTIVE_MATRIX = FEAT_MATRIX;
   ACTIVE_ATTRS  = selectedSet;
   hacCache      = {};
@@ -1624,9 +1657,6 @@ document.getElementById('feat-compute-btn').addEventListener('click', async () =
   sp.classList.add('d-none');
   prog.classList.add('d-none');
   btn.disabled = false;
-
-  // Save the feature matrix to MongoDB
-  saveFeatureMatrix([...selectedSet], COUNTRIES, FEAT_MATRIX);
 
   run();
 });

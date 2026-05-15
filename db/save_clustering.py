@@ -36,7 +36,12 @@ def save_run(algorithm: str, parameters: dict, assignments: dict,
     """
     db = get_db()
 
-    num_clusters = len(set(assignments.values())) if assignments else 0
+    if isinstance(assignments, list):
+        num_clusters = len(set(assignments))
+    elif isinstance(assignments, dict):
+        num_clusters = len(set(assignments.values()))
+    else:
+        num_clusters = 0
 
     doc = {
         "timestamp":    datetime.now(timezone.utc),
