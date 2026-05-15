@@ -47,6 +47,8 @@ def _save_to_mongo(countries, matrix, tree_dir, workers, duration):
         db = get_db()
         doc = {
             "timestamp":        datetime.now(timezone.utc),
+            "type":             "full",
+            "source":           "python",
             "duration_seconds": round(duration, 1),
             "num_countries":    len(countries),
             "num_pairs":        len(countries) * (len(countries) - 1) // 2,

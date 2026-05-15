@@ -439,6 +439,8 @@ let ACTIVE_ATTRS  = null;   // Set of selected attribute labels, or null in full
 let LAST_ASSIGNMENTS = null;
 let LAST_CLUSTERS    = null;
 let ALL_FEATURES     = [];
+let featuresLoaded   = false;   // true once the attr picker is populated
+let treesLoaded      = false;   // true once full tree data is loaded
 
 const PALETTE = [
   ...d3.schemeTableau10,
@@ -609,30 +611,100 @@ function closeMatrixOverlay() {
   overlay.setAttribute('aria-hidden', 'true');
 }
 
+// Populate the attr picker UI once ALL_FEATURES is set
+function setupAttrPickerUI() {
+  renderAttrOptions('');
+  const searchInput = document.getElementById('feat-search');
+  if (searchInput) {
+    searchInput.value = '';
+    searchInput.addEventListener('input', () => renderAttrOptions(searchInput.value || ''));
+  }
+  updateFeatSummary();
+}
+
+// Fast path: load only the feature label+count list from DB (no tree data needed)
+async function ensureFeaturesLoaded() {
+  if (featuresLoaded) return;
+  featuresLoaded = true;
+  document.getElementById('feat-checks').innerHTML =
+    '<div class="feat-empty"><span class="spinner-border spinner-border-sm me-2" style="width:1rem;height:1rem;"></span>Loading features…</div>';
+  document.getElementById('feat-compute-btn').disabled = true;
+
+  try {
+    const res = await fetch(`${DB_API}/api/features`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.length) {
+        ALL_FEATURES = data; // already sorted by the server
+        setupAttrPickerUI();
+        return;
+      }
+    }
+  } catch (_) {}
+
+  // Fallback: load full trees and derive frequencies locally
+  await loadAllTrees();
+  treesLoaded = true;
+  buildAttrPicker();
+}
+
+// Slow path: load full tree data — only needed when actually computing a feature matrix
+async function ensureTreesLoaded() {
+  if (treesLoaded) return;
+  treesLoaded = true;
+  await loadAllTrees();
+}
+
+//Fetches the precomputed similarity matrix JSON and country list, then kicks off all initialization.
 // ─── Load data ────────────────────────────────────────────────────────────────
 async function loadData() {
-  const resp = await fetch('../data/similarity_matrix.json');
-  const data = await resp.json();
+  // Try MongoDB first (served by Flask API); fall back to JSON file
+  let data;
+  try {
+    const res = await fetch(`${DB_API}/api/matrix/full`);
+    if (res.ok) {
+      data = await res.json();
+      document.getElementById('loading-msg').textContent = 'Matrix loaded from database…';
+    }
+  } catch (_) { /* API not running — fall through to JSON file */ }
+
+  if (!data) {
+    const resp = await fetch('../data/similarity_matrix.json');
+    data = await resp.json();
+  }
+
   COUNTRIES     = data.countries;
   MATRIX        = data.matrix;
   N             = COUNTRIES.length;
   ACTIVE_MATRIX = MATRIX;
   populateCountrySearchList();
 
-  document.getElementById('loading-msg').textContent = 'Loading country trees…';
-  await tick();
-  await loadAllTrees();
-  buildAttrPicker();
+  // Try loading cached MDS coords from DB — skip recomputing if available
+  let mdsFromDB = false;
+  try {
+    const mdsRes = await fetch(`${DB_API}/api/mds`);
+    if (mdsRes.ok) {
+      const mdsData = await mdsRes.json();
+      if (mdsData && mdsData.x && mdsData.x.length === N) {
+        fullMdsCoords = { x: mdsData.x, y: mdsData.y };
+        mdsCoords     = fullMdsCoords;
+        mdsFromDB     = true;
+      }
+    }
+  } catch (_) {}
 
-  document.getElementById('loading-msg').textContent = 'Computing MDS projection…';
-  await tick();
-  fullMdsCoords = classicalMDS();
-  mdsCoords     = fullMdsCoords;
-
-  document.getElementById('loading-msg').textContent = 'Precomputing HAC (average)…';
-  await tick();
-  computeHAC('ward');
-  initCutSlider('ward');
+  if (!mdsFromDB) {
+    document.getElementById('loading-msg').textContent = 'Computing MDS projection…';
+    await tick();
+    fullMdsCoords = classicalMDS();
+    mdsCoords     = fullMdsCoords;
+    // Save to DB so next refresh is instant (fire and forget)
+    fetch(`${DB_API}/api/mds`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ x: Array.from(fullMdsCoords.x), y: Array.from(fullMdsCoords.y) }),
+    }).catch(() => {});
+  }
 
   document.getElementById('loading').style.display = 'none';
   document.getElementById('app').classList.remove('d-none');
@@ -711,6 +783,11 @@ function kmedoids(k, seed, maxIter = 100) {
   return { medoids, assignments: asgn, clusters, cost, iterations };
 }
 
+
+// The main HAC algorithm. 
+// Takes all 194 countries, each as their own cluster, and repeatedly merges the two closest ones until one cluster remains.
+//  Records every merge (which two clusters merged, at what distance). Stores the result in hacCache so it doesn't recompute if you pick the same linkage again.
+
 // ─── HAC (Lance-Williams) ─────────────────────────────────────────────────────
 function computeHAC(linkage) {
   if (hacCache[linkage]) return hacCache[linkage];
@@ -762,6 +839,8 @@ function computeHAC(linkage) {
   return hacCache[linkage];
 }
 
+//Given the merge history, cuts the dendrogram to produce exactly k clusters. 
+// It replays the merges one by one and stops after n - k merges.
 function hacCut(result, k) {
   const { merges, n } = result;
   const stop = n - k;
@@ -784,7 +863,8 @@ function hacCut(result, k) {
   });
   return { assignments: asgn, clusters, cutDistance: cutDist };
 }
-
+//Same idea but instead of stopping at a fixed k, it stops when the next merge would exceed the threshold distance.
+//  This is what the slider controls.
 function hacCutByDistance(result, threshold) {
   const { merges, n } = result;
   const members = Object.fromEntries(Array.from({length: n}, (_, i) => [i, [i]]));
@@ -805,6 +885,7 @@ function hacCutByDistance(result, threshold) {
   return { assignments: asgn, clusters, cutDistance: threshold };
 }
 
+// Looks at all merge distances in order, finds the biggest jump between two consecutive merges, and returns the midpoint of that jump as the suggested best cut distance.
 function findLargestGapCut(hacRes) {
   const dists = hacRes.merges.map(m => m.distance);
   let maxGap = -1, bestIdx = dists.length - 1;
@@ -815,7 +896,7 @@ function findLargestGapCut(hacRes) {
   // Place cut midway between the two merges bracketing the largest gap
   return (dists[bestIdx - 1] + dists[bestIdx]) / 2;
 }
-
+//Sets up the cut slider range based on the HAC result, then calls findLargestGapCut() to auto-set the slider to the best starting position.
 function initCutSlider(linkage) {
   const hacRes = computeHAC(linkage);
   const maxD   = hacRes.merges[hacRes.merges.length - 1]?.distance || 1;
@@ -827,7 +908,8 @@ function initCutSlider(linkage) {
   slider.value = best.toFixed(6);
   updateCutBadges(hacRes, best);
 }
-
+//Updates the two small badges next to the slider — 
+// the current distance value and how many clusters that distance produces.
 function updateCutBadges(hacRes, threshold) {
   document.getElementById('cut-badge').textContent = (+threshold).toFixed(3);
   const k = hacCutByDistance(hacRes, +threshold).clusters.length;
@@ -1525,6 +1607,20 @@ function filterTree(tree, selectedSet) {
 }
 
 async function loadAllTrees() {
+  // Try loading all trees in one request from MongoDB via Flask API
+  try {
+    const res = await fetch(`${DB_API}/api/trees`);
+    if (res.ok) {
+      const docs = await res.json();
+      // Build lookup by name, then align to COUNTRIES order
+      const byName = Object.fromEntries(docs.map(d => [d.name, d]));
+      TREES_TOK = COUNTRIES.map(name => sortTree(byName[name]?.tokenized_tree?.tree || { label: name, children: [] }));
+      TREES_RAW = COUNTRIES.map(name => sortTree(byName[name]?.display_tree?.tree   || { label: name, children: [] }));
+      return;
+    }
+  } catch (_) { /* API not running — fall through to individual files */ }
+
+  // Fallback: fetch individual JSON files
   const [tokData, rawData] = await Promise.all([
     Promise.all(COUNTRIES.map(name => fetch(`../data/trees_tokens/${name}.json`).then(r => r.json()))),
     Promise.all(COUNTRIES.map(name => fetch(`../data/trees/${name}.json`).then(r => r.json())))
@@ -1544,18 +1640,7 @@ function buildAttrPicker() {
   ALL_FEATURES = [...freq.entries()]
     .map(([label, count]) => ({ label, count }))
     .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
-
-  renderAttrOptions('');
-
-  const searchInput = document.getElementById('feat-search');
-  if (searchInput) {
-    searchInput.value = '';
-    searchInput.addEventListener('input', () => {
-      renderAttrOptions(searchInput.value || '');
-    });
-  }
-
-  updateFeatSummary();
+  setupAttrPickerUI();
 }
 
 function renderAttrOptions(query = '') {
@@ -1637,6 +1722,11 @@ document.querySelectorAll('input[name="algo"]').forEach(r =>
     document.getElementById('km-params').classList.toggle('d-none',     isHAC);
     document.getElementById('hac-params').classList.toggle('d-none',    !isHAC);
     document.getElementById('hac-cut-params').classList.toggle('d-none', !isHAC);
+    if (isHAC) {
+      const linkage = document.getElementById('hac-linkage').value;
+      computeHAC(linkage);
+      initCutSlider(linkage);
+    }
   })
 );
 
@@ -1674,13 +1764,17 @@ document.querySelectorAll('input[name="feat-mode"]').forEach(r =>
   r.addEventListener('change', async function () {
     document.getElementById('feat-picker').classList.toggle('d-none', this.value !== 'selected');
     if (this.value === 'selected') {
-      // trees are loaded at startup — nothing extra needed
+      await ensureFeaturesLoaded();  // fast: just label+count from DB
     } else {
       if (ACTIVE_MATRIX !== MATRIX) {
         ACTIVE_MATRIX = MATRIX;
         ACTIVE_ATTRS  = null;
         hacCache      = {};
         mdsCoords     = fullMdsCoords;
+        // Auto-compute best HAC cut for the full matrix
+        const currentLinkage = document.getElementById('hac-linkage').value;
+        computeHAC(currentLinkage);
+        initCutSlider(currentLinkage);
         run();
       }
     }
@@ -1702,6 +1796,7 @@ document.getElementById('feat-none-btn').addEventListener('click', () => {
 });
 
 document.getElementById('feat-compute-btn').addEventListener('click', async () => {
+  await ensureTreesLoaded();
   const checked = [...document.querySelectorAll('.feat-attr-cb:checked')];
   if (!checked.length) return;
   const selectedSet = new Set(checked.map(cb => cb.value));
@@ -1753,6 +1848,11 @@ document.getElementById('feat-compute-btn').addEventListener('click', async () =
   document.getElementById('feat-progress-text').textContent = 'Computing MDS…';
   await tick();
   mdsCoords = classicalMDS();
+
+  // Auto-compute best HAC cut for the new feature matrix
+  const currentLinkage = document.getElementById('hac-linkage').value;
+  computeHAC(currentLinkage);
+  initCutSlider(currentLinkage);
 
   sp.classList.add('d-none');
   prog.classList.add('d-none');
