@@ -49,6 +49,60 @@
     .matrix-table th { position: sticky; top: 0; background: #f8f9fa; z-index: 2; }
     .matrix-row-h { position: sticky; left: 0; background: #f8f9fa; z-index: 3; font-weight: 700; }
     .matrix-corner { left: 0; z-index: 4 !important; }
+    .feat-search-input {
+      max-width: 360px;
+      font-size: 0.88rem;
+    }
+    .feat-list {
+      max-height: 220px;
+      overflow-y: auto;
+      border: 1px solid #dee2e6;
+      border-radius: 8px;
+      background: #fff;
+      padding: 8px;
+    }
+    .feat-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 6px 8px;
+      border-radius: 6px;
+      border: 1px solid transparent;
+      margin-bottom: 4px;
+    }
+    .feat-item:hover {
+      background: #f8fbff;
+      border-color: #dbe7ff;
+    }
+    .feat-item .form-check {
+      margin: 0;
+      min-width: 0;
+      flex: 1;
+    }
+    .feat-label {
+      font-size: 0.88rem;
+      font-weight: 500;
+      color: #212529;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 100%;
+    }
+    .feat-count {
+      font-size: 0.75rem;
+      color: #6c757d;
+      background: #f1f3f5;
+      border-radius: 999px;
+      padding: 2px 8px;
+      flex-shrink: 0;
+    }
+    .feat-empty {
+      font-size: 0.82rem;
+      color: #6c757d;
+      padding: 10px 8px;
+      text-align: center;
+    }
   </style>
 </head>
 <body>
@@ -167,8 +221,15 @@
             </div>
           </div>
           <div id="feat-picker" class="col-12 d-none">
-            <div id="feat-checks" class="d-flex flex-wrap gap-1 p-2 mb-2"
-                 style="max-height:140px;overflow-y:auto;border:1px solid #dee2e6;border-radius:6px;background:#fff;"></div>
+            <div class="mb-2">
+              <input
+                type="text"
+                id="feat-search"
+                class="form-control form-control-sm feat-search-input"
+                placeholder="Search features (e.g., population, area, language)..."
+              />
+            </div>
+            <div id="feat-checks" class="feat-list mb-2"></div>
             <div class="d-flex flex-wrap align-items-center gap-2">
               <button type="button" class="btn btn-outline-secondary btn-sm" id="feat-all-btn">Select All</button>
               <button type="button" class="btn btn-outline-secondary btn-sm" id="feat-none-btn">Clear</button>
@@ -377,6 +438,7 @@ let ACTIVE_MATRIX = null;   // points to MATRIX or FEAT_MATRIX
 let ACTIVE_ATTRS  = null;   // Set of selected attribute labels, or null in full-tree mode
 let LAST_ASSIGNMENTS = null;
 let LAST_CLUSTERS    = null;
+let ALL_FEATURES     = [];
 
 const PALETTE = [
   ...d3.schemeTableau10,
@@ -1479,22 +1541,56 @@ function buildAttrPicker() {
       freq.set(lbl, (freq.get(lbl) || 0) + 1);
     })
   );
-  const sorted = [...freq.entries()].sort((a, b) => b[1] - a[1]);
+  ALL_FEATURES = [...freq.entries()]
+    .map(([label, count]) => ({ label, count }))
+    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
 
+  renderAttrOptions('');
+
+  const searchInput = document.getElementById('feat-search');
+  if (searchInput) {
+    searchInput.value = '';
+    searchInput.addEventListener('input', () => {
+      renderAttrOptions(searchInput.value || '');
+    });
+  }
+
+  updateFeatSummary();
+}
+
+function renderAttrOptions(query = '') {
   const container = document.getElementById('feat-checks');
-  container.innerHTML = sorted.map(([label, count]) =>
-    `<div class="form-check me-2" style="white-space:nowrap">
-      <input class="form-check-input feat-attr-cb" type="checkbox" id="attr-${label}" value="${label}">
-      <label class="form-check-label" for="attr-${label}" style="font-size:12px;">
-        ${label.replace(/_/g, ' ')} <span class="text-muted">(${count})</span>
-      </label>
+  if (!container) return;
+
+  const selected = new Set(
+    [...document.querySelectorAll('.feat-attr-cb:checked')].map(cb => cb.value)
+  );
+
+  const q = String(query || '').trim().toLowerCase();
+  const visible = !q
+    ? ALL_FEATURES
+    : ALL_FEATURES.filter(f => f.label.replace(/_/g, ' ').toLowerCase().includes(q));
+
+  if (!visible.length) {
+    container.innerHTML = '<div class="feat-empty">No features match your search.</div>';
+    return;
+  }
+
+  container.innerHTML = visible.map(({ label, count }) =>
+    `<div class="feat-item">
+      <div class="form-check">
+        <input class="form-check-input feat-attr-cb" type="checkbox" id="attr-${label}" value="${label}" ${selected.has(label) ? 'checked' : ''}>
+        <label class="form-check-label feat-label" for="attr-${label}" title="${label.replace(/_/g, ' ')}">
+          ${label.replace(/_/g, ' ')}
+        </label>
+      </div>
+      <span class="feat-count" title="Countries containing this feature">${count}</span>
     </div>`
   ).join('');
 
   container.querySelectorAll('.feat-attr-cb').forEach(cb =>
     cb.addEventListener('change', updateFeatSummary)
   );
-  updateFeatSummary();
 }
 
 function updateFeatSummary() {
@@ -1592,6 +1688,10 @@ document.querySelectorAll('input[name="feat-mode"]').forEach(r =>
 );
 
 document.getElementById('feat-all-btn').addEventListener('click', () => {
+  ALL_FEATURES.forEach(({ label }) => {
+    const el = document.getElementById(`attr-${label}`);
+    if (el) el.checked = true;
+  });
   document.querySelectorAll('.feat-attr-cb').forEach(cb => { cb.checked = true; });
   updateFeatSummary();
 });
