@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from ted_distance import load_tree, ted_distance as compute_ted
+from ted_distance import load_tree, node_label, set_attr_weights, ted_distance as compute_ted
 
 try:
     from db.db_config import get_db
@@ -26,9 +26,24 @@ except Exception:
     _MONGO_AVAILABLE = False
 
 
+def _build_attr_freq(tree_paths: list[Path]) -> dict[str, int]:
+    """Count how many trees contain each top-level attribute label."""
+    freq: dict[str, int] = {}
+    for p in tree_paths:
+        try:
+            tree = load_tree(p)
+            for child in tree.get("children", []):
+                lbl = node_label(child)
+                freq[lbl] = freq.get(lbl, 0) + 1
+        except Exception:
+            pass
+    return freq
+
+
 def _worker(args: tuple) -> tuple[int, int, float]:
     """Compute normalized TED similarity for one country pair (worker process)."""
-    i, j, path_i, path_j = args
+    i, j, path_i, path_j, attr_freq, n_countries = args
+    set_attr_weights(attr_freq, n_countries)   # set in this worker process
     tree_i = load_tree(Path(path_i))
     tree_j = load_tree(Path(path_j))
     result = compute_ted(tree_i, tree_j)
@@ -53,16 +68,24 @@ def _save_to_mongo(countries, matrix, tree_dir, workers, duration):
             "num_countries":    len(countries),
             "num_pairs":        len(countries) * (len(countries) - 1) // 2,
             "parameters": {
-                "tree_dir":      str(tree_dir),
-                "workers":       workers,
-                "sorted_trees":  True,
-                "numeric_costs": True,
+                "tree_dir":       str(tree_dir),
+                "workers":        workers,
+                "sorted_trees":   True,
+                "numeric_costs":  True,
+                "attr_weighting": True,
+                "normalization":  "jaccard",
             },
             "countries": countries,
             "matrix":    matrix,
         }
-        db.matrix_computations.insert_one(doc)
-        print(f"Computation saved to MongoDB (matrix_computations).")
+        # Replace any existing full matrix so the API always serves the latest one.
+        db.matrix_computations.replace_one({"type": "full"}, doc, upsert=True)
+        # Old feature matrices were computed with the previous formula — clear them.
+        db.matrix_computations.delete_many({"type": "feature"})
+        # MDS coordinates are derived from the matrix and must be recomputed.
+        db.mds_cache.delete_many({})
+        print("Full matrix saved to MongoDB (replaced previous).")
+        print("Old feature matrices and MDS cache cleared.")
     except Exception as e:
         print(f"MongoDB save skipped: {e}")
 
@@ -76,6 +99,11 @@ def compute_matrix(tree_dir: Path, output_file: Path, workers: int) -> None:
     n = len(countries)
     total_pairs = n * (n - 1) // 2
     print(f"Found {n} countries -> {total_pairs} unique pairs.")
+
+    print("Building attribute frequency weights...")
+    attr_freq = _build_attr_freq(tree_paths)
+    set_attr_weights(attr_freq, n)   # for the single-process path
+    print(f"  {len(attr_freq)} distinct top-level attributes found.")
 
     # Initialize matrix (diagonal = 1.0, rest = 0.0 until computed)
     matrix = [[0.0] * n for _ in range(n)]
@@ -108,7 +136,7 @@ def compute_matrix(tree_dir: Path, output_file: Path, workers: int) -> None:
             print(f"Could not load partial file ({e}) — starting fresh.")
 
     work = [
-        (i, j, str(tree_paths[i]), str(tree_paths[j]))
+        (i, j, str(tree_paths[i]), str(tree_paths[j]), attr_freq, n)
         for i in range(n)
         for j in range(i + 1, n)
         if (i, j) not in done_pairs

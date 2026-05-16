@@ -212,5 +212,54 @@ def save_mds():
     return jsonify({"saved": True}), 201
 
 
+@app.get("/api/reference_groups")
+def list_reference_groups():
+    """Return all reference group documents (id, label, groups map)."""
+    db   = get_db()
+    docs = list(db.reference_groups.find({}, {"_id": 1, "label": 1, "groups": 1}))
+    for d in docs:
+        d["_id"] = str(d["_id"])
+    return jsonify(docs)
+
+
+@app.get("/api/reference_groups/<ref_id>")
+def get_reference_group(ref_id):
+    """Return a single reference group document by its string _id."""
+    db  = get_db()
+    doc = db.reference_groups.find_one(
+        {"_id": ref_id},
+        {"_id": 1, "label": 1, "groups": 1}
+    )
+    if not doc:
+        return jsonify({"error": "not found"}), 404
+    doc["_id"] = str(doc["_id"])
+    return jsonify(doc)
+
+
+@app.get("/api/feature_presets")
+def list_feature_presets():
+    db   = get_db()
+    docs = list(db.feature_presets.find(
+        {},
+        {"_id": 1, "label": 1, "description": 1, "features": 1}
+    ))
+    for d in docs:
+        d["_id"] = str(d["_id"])
+    return jsonify(docs)
+
+
+@app.get("/api/feature_presets/<preset_id>")
+def get_feature_preset(preset_id):
+    db  = get_db()
+    doc = db.feature_presets.find_one(
+        {"_id": preset_id},
+        {"_id": 1, "label": 1, "description": 1, "features": 1}
+    )
+    if not doc:
+        return jsonify({"error": "not found"}), 404
+    doc["_id"] = str(doc["_id"])
+    return jsonify(doc)
+
+
 if __name__ == "__main__":
     app.run(port=5050, debug=True)

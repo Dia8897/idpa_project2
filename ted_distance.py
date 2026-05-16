@@ -10,6 +10,27 @@ DEFAULT_TREE_DIR = Path("data/trees_tokens")
 _ACTIVE_SOURCE_SUBTREES = frozenset()
 _ACTIVE_TARGET_SUBTREES = frozenset()
 
+# Attribute frequency weights (label → count across all country trees).
+# Set via set_attr_weights() before computing the full similarity matrix.
+# When empty (default), all attributes get weight 1.0 (original behaviour).
+_ATTR_WEIGHTS: dict[str, int] = {}
+_N_COUNTRIES: int = 1
+
+
+def set_attr_weights(attr_freq: dict[str, int], n: int) -> None:
+    """Pre-load per-attribute frequency counts used by the top-level TED DP."""
+    global _ATTR_WEIGHTS, _N_COUNTRIES
+    _N_COUNTRIES = max(n, 1)
+    _ATTR_WEIGHTS = dict(attr_freq)
+
+
+def _attr_weight(label: str) -> float:
+    """Coverage-based weight in [0.01, 1] for a depth-1 (attribute) node."""
+    if not _ATTR_WEIGHTS:
+        return 1.0
+    coverage = _ATTR_WEIGHTS.get(label, 0) / _N_COUNTRIES
+    return max(0.01, coverage)
+
 
 def round3(value: float) -> float:
     return round(float(value), 3)
@@ -75,24 +96,20 @@ def subtree_size(node: dict) -> int:
 
 def cost_del_tree(node: dict) -> int:
     """
-    Nierman-Jagadish subtree deletion cost:
-    - 1 if the subtree already exists somewhere in the destination tree
-    - otherwise fall back to subtree size
+    Subtree deletion cost:
+    - 0 if the exact subtree already exists in the destination tree
+    - 1 otherwise (all attributes contribute equally as units)
     """
-    if contained_in_target_tree(node):
-        return 1
-    return subtree_size(node)
+    return 0 if contained_in_target_tree(node) else 1
 
 
 def cost_ins_tree(node: dict) -> int:
     """
-    Nierman-Jagadish subtree insertion cost:
-    - 1 if the subtree already exists somewhere in the source tree
-    - otherwise fall back to subtree size
+    Subtree insertion cost:
+    - 0 if the exact subtree already exists in the source tree
+    - 1 otherwise (all attributes contribute equally as units)
     """
-    if contained_in_source_tree(node):
-        return 1
-    return subtree_size(node)
+    return 0 if contained_in_source_tree(node) else 1
 
 
 def _try_numeric(label: str) -> float | None:
@@ -210,21 +227,60 @@ def configure_ted_context(tree1: dict, tree2: dict):
 def ted_distance(tree1: dict, tree2: dict):
     configure_ted_context(tree1, tree2)
 
-    size1 = subtree_size(tree1)
-    size2 = subtree_size(tree2)
-    distance = round3(ted(serialize_node(tree1), serialize_node(tree2)))
-    similarity = round3(normalized_similarity(distance, size1, size2))
+    a, b  = tree1, tree2
+    size1 = subtree_size(a)
+    size2 = subtree_size(b)
+
+    # Top-level DP — mirrors makeTedContext() in cluster.html.
+    # Depth-1 children (direct attributes of the root) are weighted by
+    # _attr_weight(); deeper nodes use unit cost (weight = 1.0).
+    if node_label(a) != node_label(b) and not (is_leaf(a) and is_leaf(b)):
+        raw_dist = cost_del_tree(a) + cost_ins_tree(b)
+    else:
+        a_ch = a.get("children", [])
+        b_ch = b.get("children", [])
+        m, nc = len(a_ch), len(b_ch)
+
+        dist = [[0.0] * (nc + 1) for _ in range(m + 1)]
+        dist[0][0] = cost_upd_root(a, b)
+
+        for i in range(1, m + 1):
+            c = a_ch[i - 1]
+            dist[i][0] = dist[i - 1][0] + cost_del_tree(c) * _attr_weight(node_label(c))
+        for j in range(1, nc + 1):
+            c = b_ch[j - 1]
+            dist[0][j] = dist[0][j - 1] + cost_ins_tree(c) * _attr_weight(node_label(c))
+
+        for i in range(1, m + 1):
+            for j in range(1, nc + 1):
+                ci, cj = a_ch[i - 1], b_ch[j - 1]
+                dist[i][j] = min(
+                    dist[i - 1][j - 1] + ted(serialize_node(ci), serialize_node(cj)),
+                    dist[i - 1][j]     + cost_del_tree(ci) * _attr_weight(node_label(ci)),
+                    dist[i][j - 1]     + cost_ins_tree(cj) * _attr_weight(node_label(cj)),
+                )
+        raw_dist = dist[m][nc]
+
+    distance = round3(raw_dist)
+
+    # Attribute-count normalization: 1 - ted / max(attrs1, attrs2, 1)
+    # Matches computeTedSim() in cluster.html — fair comparison regardless of
+    # tree size differences between countries.
+    attrs1 = len(a.get("children", []))
+    attrs2 = len(b.get("children", []))
+    denom  = max(attrs1, attrs2, 1)
+    similarity = round3(max(0.0, 1.0 - distance / denom))
     similarity_formula1 = round3(slide_similarity_formula1(distance))
     common_score = round3((size1 + size2 - distance) / 2)
 
     return {
-        "tree_dir": str(DEFAULT_TREE_DIR),
-        "size1": size1,
-        "size2": size2,
-        "distance": distance,
-        "common_score": common_score,
+        "tree_dir":                  str(DEFAULT_TREE_DIR),
+        "size1":                     size1,
+        "size2":                     size2,
+        "distance":                  distance,
+        "common_score":              common_score,
         "slide_similarity_formula1": similarity_formula1,
-        "normalized_similarity": similarity,
+        "normalized_similarity":     similarity,
     }
 
 

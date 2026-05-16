@@ -184,6 +184,7 @@
               <span class="badge bg-secondary" id="cut-k-badge">- clusters</span>
             </label>
             <input type="range" class="form-range" id="cut-slider" min="0" max="1" step="0.001" value="0.5">
+            <div id="hac-k-hint" class="text-muted small mt-1"></div>
           </div>
 
           <!-- Run button -->
@@ -221,6 +222,9 @@
             </div>
           </div>
           <div id="feat-picker" class="col-12 d-none">
+            <div id="preset-btns" class="mb-2 d-none"></div>
+            <div id="preset-description" class="text-muted small mb-2 d-none"></div>
+            <div id="preset-ref-hint" class="small mt-1" style="color:#E65100;"></div>
             <div class="mb-2">
               <input
                 type="text"
@@ -439,8 +443,22 @@ let ACTIVE_ATTRS  = null;   // Set of selected attribute labels, or null in full
 let LAST_ASSIGNMENTS = null;
 let LAST_CLUSTERS    = null;
 let ALL_FEATURES     = [];
+let FEATURE_PRESETS  = [];      // loaded from MongoDB feature_presets collection
 let featuresLoaded   = false;   // true once the attr picker is populated
 let treesLoaded      = false;   // true once full tree data is loaded
+let ATTR_FREQ        = {};      // label → count across all tokenized trees
+
+const PERCENTILE_ATTRS = new Set([
+  'total', 'density', 'estimate', 'census',
+  'water', 'pop_density', 'population',
+  'total_area', 'land', 'land_area', 'area'
+]);
+let ATTR_PERCENTILE_VALS = {};  // attr → sorted numeric values across all countries
+
+function attrWeight(label) {
+  const coverage = (ATTR_FREQ[label] || 0) / N;
+  return Math.max(0.01, coverage);
+}
 
 const PALETTE = [
   ...d3.schemeTableau10,
@@ -449,7 +467,7 @@ const PALETTE = [
 const col   = i => PALETTE[i % PALETTE.length];
 const dname = i => COUNTRIES[i].replace(/_/g, ' ');
 
-// ─── Ground-truth reference datasets ─────────────────────────────────────────
+// ─── Ground-truth reference datasets (hardcoded fallback; DB values override) ─
 const GROUND_TRUTH_DATA = {
   continents: {
     label: 'Continents (7)',
@@ -524,6 +542,109 @@ Object.entries(GROUND_TRUTH_DATA.continents.map).forEach(([k, v]) => {
   GROUND_TRUTH_DATA.un_regions.map[k] =
     (v === 'North America' || v === 'South America') ? 'Americas' : v;
 });
+
+function populateRefDropdown() {
+  const sel = document.getElementById('ref-data');
+  if (!sel) return;
+  const current = sel.value;
+  sel.innerHTML = '<option value="none">None — internal metrics only</option>';
+  Object.entries(GROUND_TRUTH_DATA).forEach(([key, gt]) => {
+    const opt = document.createElement('option');
+    opt.value = key;
+    opt.textContent = gt.label;
+    sel.appendChild(opt);
+  });
+  if ([...sel.options].some(o => o.value === current)) sel.value = current;
+}
+
+async function loadReferenceGroups() {
+  try {
+    const res = await fetch(`${DB_API}/api/reference_groups`);
+    if (!res.ok) return;
+    const refs = await res.json();
+    refs.forEach(r => {
+      GROUND_TRUTH_DATA[r._id] = { label: r.label, map: r.groups };
+    });
+    populateRefDropdown();
+  } catch (_) {
+    // MongoDB not running — keep hardcoded defaults
+  }
+}
+
+async function loadFeaturePresets() {
+  try {
+    const res = await fetch(`${DB_API}/api/feature_presets`);
+    if (!res.ok) return;
+    FEATURE_PRESETS = await res.json();
+    renderPresetButtons();
+  } catch (_) {
+    // MongoDB not running — preset buttons simply won't appear
+  }
+}
+
+function renderPresetButtons() {
+  const container = document.getElementById('preset-btns');
+  if (!container || !FEATURE_PRESETS.length) return;
+
+  container.innerHTML = '<span class="text-muted small me-2">Quick presets:</span>';
+
+  FEATURE_PRESETS.forEach(preset => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn btn-sm btn-outline-secondary me-1';
+    btn.dataset.presetId = preset._id;
+    btn.textContent = preset.label;
+    btn.addEventListener('click', () => {
+      // Uncheck all
+      document.querySelectorAll('.feat-attr-cb').forEach(cb => { cb.checked = false; });
+      // Check only this preset's features
+      preset.features.forEach(label => {
+        const el = document.getElementById(`attr-${label}`);
+        if (el) el.checked = true;
+      });
+      // Highlight active preset button
+      container.querySelectorAll('.btn[data-preset-id]').forEach(b => {
+        b.className = b.dataset.presetId === preset._id
+          ? 'btn btn-sm btn-primary me-1'
+          : 'btn btn-sm btn-outline-secondary me-1';
+      });
+      // Show description
+      const desc = document.getElementById('preset-description');
+      if (desc) { desc.textContent = preset.description; desc.classList.remove('d-none'); }
+      // Show Political-preset warning hint
+      const hint = document.getElementById('preset-ref-hint');
+      if (hint) {
+        if (preset._id === 'political') {
+          hint.textContent = '⚠ Political features do not align with geographic references. For better results, use Income Groups or UN Regions as your Evaluation Reference Data.';
+        } else {
+          hint.textContent = '';
+        }
+      }
+      updateFeatSummary();
+    });
+    container.appendChild(btn);
+  });
+
+  // Clear preset button
+  const clearBtn = document.createElement('button');
+  clearBtn.type = 'button';
+  clearBtn.className = 'btn btn-sm btn-outline-danger me-1';
+  clearBtn.textContent = 'Clear preset';
+  clearBtn.addEventListener('click', () => {
+    document.querySelectorAll('.feat-attr-cb').forEach(cb => { cb.checked = false; });
+    container.querySelectorAll('.btn[data-preset-id]').forEach(b => {
+      b.className = 'btn btn-sm btn-outline-secondary me-1';
+    });
+    const desc = document.getElementById('preset-description');
+    if (desc) { desc.textContent = ''; desc.classList.add('d-none'); }
+    const hint = document.getElementById('preset-ref-hint');
+    if (hint) hint.textContent = '';
+    updateFeatSummary();
+  });
+  container.appendChild(clearBtn);
+
+  container.classList.remove('d-none');
+}
 
 function normalizeCountryName(s) {
   return String(s || '').replace(/_/g, ' ').trim().toLowerCase();
@@ -637,6 +758,8 @@ async function ensureFeaturesLoaded() {
       if (data && data.length) {
         ALL_FEATURES = data; // already sorted by the server
         setupAttrPickerUI();
+        console.log(JSON.stringify(ALL_FEATURES));
+        await loadFeaturePresets();
         return;
       }
     }
@@ -646,6 +769,7 @@ async function ensureFeaturesLoaded() {
   await loadAllTrees();
   treesLoaded = true;
   buildAttrPicker();
+  await loadFeaturePresets();
 }
 
 // Slow path: load full tree data — only needed when actually computing a feature matrix
@@ -658,6 +782,12 @@ async function ensureTreesLoaded() {
 //Fetches the precomputed similarity matrix JSON and country list, then kicks off all initialization.
 // ─── Load data ────────────────────────────────────────────────────────────────
 async function loadData() {
+  // Invalidate all caches so the updated TED formula is always used.
+  FEAT_MATRIX          = null;
+  hacCache             = {};
+  fullMdsCoords        = null;
+  ATTR_PERCENTILE_VALS = {};
+
   // Try MongoDB first (served by Flask API); fall back to JSON file
   let data;
   try {
@@ -706,6 +836,7 @@ async function loadData() {
     }).catch(() => {});
   }
 
+  await loadReferenceGroups();   // enriches dropdown from DB (silent fallback)
   document.getElementById('loading').style.display = 'none';
   document.getElementById('app').classList.remove('d-none');
   run();
@@ -897,6 +1028,17 @@ function findLargestGapCut(hacRes) {
   return (dists[bestIdx - 1] + dists[bestIdx]) / 2;
 }
 //Sets up the cut slider range based on the HAC result, then calls findLargestGapCut() to auto-set the slider to the best starting position.
+function findCutForK(hacRes, targetK) {
+  const dists = hacRes.merges.map(m => m.distance);
+  for (let i = 0; i < dists.length; i++) {
+    if (hacCutByDistance(hacRes, dists[i]).clusters.length <= targetK) {
+      if (i === 0) return dists[0] * 0.5;
+      return (dists[i - 1] + dists[i]) / 2;
+    }
+  }
+  return dists[dists.length - 1];
+}
+
 function initCutSlider(linkage) {
   const hacRes = computeHAC(linkage);
   const maxD   = hacRes.merges[hacRes.merges.length - 1]?.distance || 1;
@@ -904,9 +1046,20 @@ function initCutSlider(linkage) {
   slider.max   = maxD.toFixed(6);
   slider.step  = (maxD / 1000).toFixed(6);
 
-  const best   = findLargestGapCut(hacRes);
-  slider.value = best.toFixed(6);
-  updateCutBadges(hacRes, best);
+  const best       = findLargestGapCut(hacRes);
+  const suggestedK = hacCutByDistance(hacRes, best).clusters.length;
+
+  if (suggestedK > 20) {
+    const fallbackK   = 7;
+    const fallbackCut = findCutForK(hacRes, fallbackK);
+    slider.value = fallbackCut.toFixed(6);
+    updateCutBadges(hacRes, fallbackCut);
+    updateKHint(hacRes, fallbackCut, suggestedK);
+  } else {
+    slider.value = best.toFixed(6);
+    updateCutBadges(hacRes, best);
+    updateKHint(hacRes, best, null);
+  }
 }
 //Updates the two small badges next to the slider — 
 // the current distance value and how many clusters that distance produces.
@@ -914,6 +1067,26 @@ function updateCutBadges(hacRes, threshold) {
   document.getElementById('cut-badge').textContent = (+threshold).toFixed(3);
   const k = hacCutByDistance(hacRes, +threshold).clusters.length;
   document.getElementById('cut-k-badge').textContent = `${k} cluster${k !== 1 ? 's' : ''}`;
+}
+
+function updateKHint(hacRes, currentThreshold, fallbackFromK = null) {
+  const hint = document.getElementById('hac-k-hint');
+  if (!hint) return;
+  const optimalCut = findLargestGapCut(hacRes);
+  const optimalK   = hacCutByDistance(hacRes, optimalCut).clusters.length;
+  const currentK   = hacCutByDistance(hacRes, +currentThreshold).clusters.length;
+  let msg = '';
+  if (fallbackFromK != null) {
+    msg = `Note: Largest-gap rule produced k=${fallbackFromK} (too many). Defaulted to k=7 for multi-dimensional features.`;
+    hint.style.color = '#E65100';
+  } else if (currentK === optimalK) {
+    msg = `Suggested optimal k: ${optimalK}`;
+    hint.style.color = '';
+  } else {
+    msg = `Current: ${currentK} clusters  |  Suggested optimal: ${optimalK} clusters`;
+    hint.style.color = '#E65100';
+  }
+  hint.textContent = msg;
 }
 
 // ─── Evaluation ───────────────────────────────────────────────────────────────
@@ -1373,8 +1546,12 @@ async function runElbow() {
 
   const ks = d3.range(2, 11);
   const kmSil = [], kmDB = [], hacSil = [], hacDB = [];
+  const kmPrecision = [], kmRecall = [], kmFmeasure = [];
+  const hacPrecision = [], hacRecall = [], hacFmeasure = [];
 
-  const hacRes = computeHAC('average');
+  const hacRes    = computeHAC('average');
+  const refKey    = document.getElementById('ref-data').value;
+  const refLabels = refKey !== 'none' ? getRefLabels(refKey) : null;
 
   for (const k of ks) {
     const km  = kmedoids(k, 42);
@@ -1384,20 +1561,63 @@ async function runElbow() {
     const cut = hacCut(hacRes, k);
     hacSil.push(silhouette(cut.assignments));
     hacDB.push(daviesBouldin(cut.assignments));
+
+    const kmExt  = refLabels ? computeExternalMetrics(km.assignments,  refLabels) : null;
+    const hacExt = refLabels ? computeExternalMetrics(cut.assignments, refLabels) : null;
+    kmPrecision.push (kmExt  ? kmExt.precision  : null);
+    kmRecall.push    (kmExt  ? kmExt.recall     : null);
+    kmFmeasure.push  (kmExt  ? kmExt.fmeasure   : null);
+    hacPrecision.push(hacExt ? hacExt.precision : null);
+    hacRecall.push   (hacExt ? hacExt.recall    : null);
+    hacFmeasure.push (hacExt ? hacExt.fmeasure  : null);
     await tick();
   }
 
-  const series = [
-    { label: 'K-Medoids', sil: kmSil,  db: kmDB,  color: '#4e79a7' },
-    { label: 'HAC (avg)', sil: hacSil, db: hacDB, color: '#f28e2b' },
-  ];
+  renderElbowChart('#elbow-sil', ks, [
+    { label: 'K-Medoids', values: kmSil,  color: '#4e79a7' },
+    { label: 'HAC (avg)', values: hacSil, color: '#f28e2b' },
+  ], 'Silhouette Score  (higher = better)');
+  renderElbowChart('#elbow-db', ks, [
+    { label: 'K-Medoids', values: kmDB,  color: '#4e79a7' },
+    { label: 'HAC (avg)', values: hacDB, color: '#f28e2b' },
+  ], 'Davies-Bouldin Index  (lower = better)');
 
-  renderElbowChart('#elbow-sil', ks, series.map(s => ({label:s.label, values:s.sil, color:s.color})),
-    'Silhouette Score  (higher = better)');
-  renderElbowChart('#elbow-db',  ks, series.map(s => ({label:s.label, values:s.db,  color:s.color})),
-    'Davies-Bouldin Index  (lower = better)');
+  // Remove any previously rendered external charts / note
+  const elbowCharts = document.getElementById('elbow-charts');
+  elbowCharts.querySelector('#elbow-ext-pr-wrap')?.remove();
+  elbowCharts.querySelector('#elbow-ext-fm-wrap')?.remove();
+  elbowCharts.querySelector('#elbow-ext-note')?.remove();
 
-  document.getElementById('elbow-charts').style.removeProperty('display');
+  if (refLabels) {
+    const prWrap = document.createElement('div');
+    prWrap.className = 'col-md-6'; prWrap.id = 'elbow-ext-pr-wrap';
+    prWrap.innerHTML = '<div id="elbow-ext-pr"></div>';
+    elbowCharts.appendChild(prWrap);
+
+    const fmWrap = document.createElement('div');
+    fmWrap.className = 'col-md-6'; fmWrap.id = 'elbow-ext-fm-wrap';
+    fmWrap.innerHTML = '<div id="elbow-ext-fm"></div>';
+    elbowCharts.appendChild(fmWrap);
+
+    renderElbowChart('#elbow-ext-pr', ks, [
+      { label: 'KM Precision',  values: kmPrecision.map(v => v ?? 0),  color: '#4e79a7', dash: '' },
+      { label: 'KM Recall',     values: kmRecall.map(v => v ?? 0),     color: '#4e79a7', dash: '5,3' },
+      { label: 'HAC Precision', values: hacPrecision.map(v => v ?? 0), color: '#f28e2b', dash: '' },
+      { label: 'HAC Recall',    values: hacRecall.map(v => v ?? 0),    color: '#f28e2b', dash: '5,3' },
+    ], 'Precision & Recall  (higher = better)');
+
+    renderElbowChart('#elbow-ext-fm', ks, [
+      { label: 'K-Medoids', values: kmFmeasure.map(v => v ?? 0),  color: '#4e79a7' },
+      { label: 'HAC (avg)', values: hacFmeasure.map(v => v ?? 0), color: '#f28e2b' },
+    ], 'F-measure  (higher = better)');
+  } else {
+    const note = document.createElement('div');
+    note.id = 'elbow-ext-note'; note.className = 'col-12';
+    note.innerHTML = '<p class="text-muted small mt-1">Select a reference dataset above to see Precision, Recall, and F-measure in the elbow analysis.</p>';
+    elbowCharts.appendChild(note);
+  }
+
+  elbowCharts.style.removeProperty('display');
   btn.disabled = false; sp.classList.add('d-none');
 }
 
@@ -1434,20 +1654,24 @@ function renderElbowChart(selector, ks, series, title) {
 
   const line = d3.line().x((_,i) => xS(ks[i])).y(v => yS(v)).curve(d3.curveMonotoneX);
 
-  series.forEach(({label, values, color}, si) => {
+  // Legend layout: 2 entries per column (left / right)
+  const legendCols = [[0, iw / 2 - 90]];
+  series.forEach(({label, values, color, dash}, si) => {
     g.append('path').datum(values).attr('d', line(values))
-      .attr('fill','none').attr('stroke', color).attr('stroke-width', 2.2);
+      .attr('fill','none').attr('stroke', color).attr('stroke-width', 2.2)
+      .attr('stroke-dasharray', dash || '');
 
     g.selectAll(null).data(values).join('circle')
       .attr('cx', (_,i) => xS(ks[i])).attr('cy', v => yS(v))
       .attr('r', 4.5).attr('fill', color).attr('stroke','white').attr('stroke-width',1.5);
 
-    // Legend entry
-    const lx = si === 0 ? 8 : iw - 90;
-    g.append('line').attr('x1',lx).attr('y1',-6).attr('x2',lx+18).attr('y2',-6)
-      .attr('stroke',color).attr('stroke-width',2.2);
-    g.append('circle').attr('cx',lx+9).attr('cy',-6).attr('r',4).attr('fill',color);
-    g.append('text').attr('x',lx+22).attr('y',-2).attr('font-size','10px').attr('fill','#444').text(label);
+    // Legend entry: 2 per row, left-col for even si, right-col for odd
+    const col = si % 2 === 0 ? 8 : iw - 100;
+    const row = Math.floor(si / 2) * 13;
+    g.append('line').attr('x1',col).attr('y1',-6-row).attr('x2',col+18).attr('y2',-6-row)
+      .attr('stroke',color).attr('stroke-width',2.2).attr('stroke-dasharray', dash || '');
+    g.append('circle').attr('cx',col+9).attr('cy',-6-row).attr('r',4).attr('fill',color);
+    g.append('text').attr('x',col+22).attr('y',-2-row).attr('font-size','10px').attr('fill','#444').text(label);
   });
 }
 
@@ -1552,35 +1776,55 @@ function makeTedContext(src, tgt) {
   const srcSubs = collectSubtreeSerials(src);
   const tgtSubs = collectSubtreeSerials(tgt);
   const cache   = new Map();
-  const costDel = n => tgtSubs.has(serializeNode(n)) ? 1 : subtreeSize(n);
-  const costIns = n => srcSubs.has(serializeNode(n)) ? 1 : subtreeSize(n);
-  function costUpd(a, b) {
+
+  const costDel = (n, depth) => {
+    const base = tgtSubs.has(serializeNode(n)) ? 0 : 1;
+    const w    = (depth === 1) ? attrWeight(nodeLabel(n)) : 1.0;
+    return base * w;
+  };
+  const costIns = (n, depth) => {
+    const base = srcSubs.has(serializeNode(n)) ? 0 : 1;
+    const w    = (depth === 1) ? attrWeight(nodeLabel(n)) : 1.0;
+    return base * w;
+  };
+  function costUpd(a, b, depth, parentAttr) {
     if (nodeLabel(a) === nodeLabel(b)) return 0;
     if (isLeaf(a) && isLeaf(b)) {
+      if (parentAttr && PERCENTILE_ATTRS.has(parentAttr)) {
+        const va = parseNumericValue(nodeLabel(a));
+        const vb = parseNumericValue(nodeLabel(b));
+        if (va != null && vb != null) {
+          const rankA = percentileRank(parentAttr, va);
+          const rankB = percentileRank(parentAttr, vb);
+          if (rankA != null && rankB != null) return Math.abs(rankA - rankB);
+        }
+      }
       const nc = numericLeafUpdateCost(nodeLabel(a), nodeLabel(b));
       return nc != null ? nc : 1;
     }
-    return costDel(a) + costIns(b);
+    return costDel(a, depth) + costIns(b, depth);
   }
-  function ted(a, b) {
-    const key = serializeNode(a) + '|' + serializeNode(b);
+  function ted(a, b, depth = 0, parentAttr = null) {
+    const key = serializeNode(a) + '|' + serializeNode(b) + '|' + (parentAttr || '');
     if (cache.has(key)) return cache.get(key);
     let result;
     if (nodeLabel(a) !== nodeLabel(b) && !(isLeaf(a) && isLeaf(b))) {
-      result = costDel(a) + costIns(b);
+      result = costDel(a, depth) + costIns(b, depth);
     } else {
       const ac = a.children || [], bc = b.children || [];
       const m = ac.length, n = bc.length;
       const dp = Array.from({length: m+1}, () => new Array(n+1).fill(0));
-      dp[0][0] = costUpd(a, b);
-      for (let i = 1; i <= m; i++) dp[i][0] = dp[i-1][0] + costDel(ac[i-1]);
-      for (let j = 1; j <= n; j++) dp[0][j] = dp[0][j-1] + costIns(bc[j-1]);
+      // When at depth=1, children are attribute values — pass attribute label as parentAttr
+      const childParentAttr = (depth === 1) ? nodeLabel(a) : parentAttr;
+      dp[0][0] = costUpd(a, b, depth, parentAttr);
+      for (let i = 1; i <= m; i++) dp[i][0] = dp[i-1][0] + costDel(ac[i-1], depth + 1);
+      for (let j = 1; j <= n; j++) dp[0][j] = dp[0][j-1] + costIns(bc[j-1], depth + 1);
       for (let i = 1; i <= m; i++)
         for (let j = 1; j <= n; j++)
           dp[i][j] = Math.min(
-            dp[i-1][j-1] + ted(ac[i-1], bc[j-1]),
-            dp[i-1][j]   + costDel(ac[i-1]),
-            dp[i][j-1]   + costIns(bc[j-1])
+            dp[i-1][j-1] + ted(ac[i-1], bc[j-1], depth + 1, childParentAttr),
+            dp[i-1][j]   + costDel(ac[i-1], depth + 1),
+            dp[i][j-1]   + costIns(bc[j-1], depth + 1)
           );
       result = dp[m][n];
     }
@@ -1594,8 +1838,11 @@ function computeTedSim(t1, t2) {
   t1 = sortTree(t1);
   t2 = sortTree(t2);
   const { ted } = makeTedContext(t1, t2);
-  const total = subtreeSize(t1) + subtreeSize(t2);
-  return total ? Math.max(0, 1 - ted(t1, t2) / total) : 1;
+  const attrs1 = (t1.children || []).length;
+  const attrs2 = (t2.children || []).length;
+  const tedVal = ted(t1, t2);
+  const denom  = Math.max(attrs1, attrs2, 1);
+  return Math.max(0, 1 - tedVal / denom);
 }
 
 // ─── Feature-based clustering helpers ────────────────────────────────────────
@@ -1606,16 +1853,59 @@ function filterTree(tree, selectedSet) {
   };
 }
 
+function _buildAttrFreq() {
+  ATTR_FREQ = {};
+  TREES_TOK.forEach(tree =>
+    (tree.children || []).forEach(child => {
+      const lbl = nodeLabel(child);
+      ATTR_FREQ[lbl] = (ATTR_FREQ[lbl] || 0) + 1;
+    })
+  );
+}
+
+function buildPercentileLookup() {
+  ATTR_PERCENTILE_VALS = {};
+  for (const attr of PERCENTILE_ATTRS) {
+    const vals = [];
+    TREES_TOK.forEach(tree => {
+      const child = (tree.children || []).find(c => nodeLabel(c) === attr);
+      if (!child) return;
+      const collect = n => {
+        if (isLeaf(n)) {
+          const v = parseNumericValue(nodeLabel(n));
+          if (v != null) vals.push(v);
+        }
+        (n.children || []).forEach(collect);
+      };
+      collect(child);
+    });
+    ATTR_PERCENTILE_VALS[attr] = vals.sort((a, b) => a - b);
+  }
+}
+
+function percentileRank(attr, value) {
+  const sorted = ATTR_PERCENTILE_VALS[attr];
+  if (!sorted || !sorted.length) return null;
+  let lo = 0, hi = sorted.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (sorted[mid] < value) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo / sorted.length;
+}
+
 async function loadAllTrees() {
   // Try loading all trees in one request from MongoDB via Flask API
   try {
     const res = await fetch(`${DB_API}/api/trees`);
     if (res.ok) {
       const docs = await res.json();
-      // Build lookup by name, then align to COUNTRIES order
       const byName = Object.fromEntries(docs.map(d => [d.name, d]));
       TREES_TOK = COUNTRIES.map(name => sortTree(byName[name]?.tokenized_tree?.tree || { label: name, children: [] }));
       TREES_RAW = COUNTRIES.map(name => sortTree(byName[name]?.display_tree?.tree   || { label: name, children: [] }));
+      _buildAttrFreq();
+      buildPercentileLookup();
       return;
     }
   } catch (_) { /* API not running — fall through to individual files */ }
@@ -1627,6 +1917,8 @@ async function loadAllTrees() {
   ]);
   TREES_TOK = tokData.map(d => sortTree(d.tree));
   TREES_RAW = rawData.map(d => sortTree(d.tree));
+  _buildAttrFreq();
+  buildPercentileLookup();
 }
 
 function buildAttrPicker() {
@@ -1641,6 +1933,7 @@ function buildAttrPicker() {
     .map(([label, count]) => ({ label, count }))
     .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
   setupAttrPickerUI();
+  console.log(JSON.stringify(ALL_FEATURES));
 }
 
 function renderAttrOptions(query = '') {
@@ -1685,10 +1978,14 @@ function updateFeatSummary() {
     document.getElementById('feat-summary').textContent = 'Select at least one attribute.';
     return;
   }
-  const sel = new Set(checked.map(cb => cb.value));
-  const cov = TREES_TOK.filter(t => (t.children || []).some(c => sel.has(nodeLabel(c)))).length;
-  document.getElementById('feat-summary').textContent =
-    `${checked.length} attribute${checked.length > 1 ? 's' : ''} selected — ${cov}/${N} countries have data`;
+  const label = `${checked.length} attribute${checked.length > 1 ? 's' : ''} selected`;
+  if (TREES_TOK.length > 0) {
+    const sel = new Set(checked.map(cb => cb.value));
+    const cov = TREES_TOK.filter(t => (t.children || []).some(c => sel.has(nodeLabel(c)))).length;
+    document.getElementById('feat-summary').textContent = `${label} — ${cov}/${N} countries have data`;
+  } else {
+    document.getElementById('feat-summary').textContent = label;
+  }
 }
 
 async function computeFeatureMatrix(selectedSet) {
@@ -1744,7 +2041,10 @@ bindIfExists('cut-slider', 'input', function () {
   if (!linkageEl) return;
   const linkage = linkageEl.value;
   const hacRes  = hacCache[linkage];
-  if (hacRes) updateCutBadges(hacRes, +this.value);
+  if (hacRes) {
+    updateCutBadges(hacRes, +this.value);
+    updateKHint(hacRes, +this.value);
+  }
 });
 
 bindIfExists('run-btn', 'click', run);
@@ -1765,6 +2065,7 @@ document.querySelectorAll('input[name="feat-mode"]').forEach(r =>
     document.getElementById('feat-picker').classList.toggle('d-none', this.value !== 'selected');
     if (this.value === 'selected') {
       await ensureFeaturesLoaded();  // fast: just label+count from DB
+      if (!FEATURE_PRESETS.length) await loadFeaturePresets();
     } else {
       if (ACTIVE_MATRIX !== MATRIX) {
         ACTIVE_MATRIX = MATRIX;

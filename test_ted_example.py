@@ -156,8 +156,10 @@ def run_example_test():
     # Uses ted_edit_script.py here.
     ops = build_edit_script(tree_c, tree_d)
     assert len(ops) == 1, ops
-    assert distance_result["distance"] == 1, distance_result
-    assert_close(distance_result["normalized_similarity"], 1 - (1 / (4 + 7)))
+    # With unit costs: b(c,d) exists in tree_c's subtrees, so both copies in
+    # tree_d cost 0 to insert — distance = 0, trees are considered identical.
+    assert distance_result["distance"] == 0, distance_result
+    assert_close(distance_result["normalized_similarity"], 1.0)
 
     op = ops[0]
     assert op["kind"] == "INS", op
@@ -180,10 +182,9 @@ def run_second_example_test():
 
     # Uses ted_edit_script.py here.
     ops = build_edit_script(tree_s, tree_t)
-    # Under the project TED cost rules, this example costs 3:
-    # delete d from c(d) costs 1 because d already exists in the target tree,
-    # and inserting x(d) costs 2 because that subtree does not exist in the source tree.
-    assert distance_result["distance"] == 3, distance_result
+    # With unit costs: d_leaf exists in tree_t, so deleting d from c(d) costs 0.
+    # Optimal: match c(d)→c (free), insert x(d) (cost 1). Total distance = 1.
+    assert distance_result["distance"] == 1, distance_result
 
     print("\nSecond lecture example")
     print("Slide distance expectation:", 2)
