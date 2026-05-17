@@ -357,8 +357,29 @@
       <!-- Cluster list -->
       <div class="col-xl-5">
         <div class="card shadow-sm h-100">
-          <div class="card-header fw-semibold">Cluster Members</div>
-          <div class="card-body p-3" style="overflow-y:auto;max-height:640px;" id="cluster-cards"></div>
+          <div class="card-header d-flex align-items-center justify-content-between">
+            <span class="fw-semibold">Cluster Members</span>
+            <button id="show-true-clusters-btn" class="btn btn-outline-secondary btn-sm d-none">Show True Clusters</button>
+          </div>
+          <div class="card-body p-3" style="overflow-y:auto;max-height:580px;" id="cluster-cards"></div>
+          <div id="cluster-legend" class="px-3 pb-3 d-none border-top pt-3">
+            <div class="fw-semibold small mb-2">Cluster Accuracy Legend</div>
+            <div class="d-flex flex-wrap gap-3">
+              <span>
+                <span style="background:#d4edda;color:#155724;padding:2px 8px;border-radius:12px;font-size:11px;">✓ TP</span>
+                <span class="text-muted small ms-1">Correctly placed</span>
+              </span>
+              <span>
+                <span style="background:#f8d7da;color:#721c24;padding:2px 8px;border-radius:12px;font-size:11px;">✗ FP</span>
+                <span class="text-muted small ms-1">Wrong cluster</span>
+              </span>
+              <span>
+                <span style="background:#fff3cd;color:#856404;padding:2px 8px;border-radius:12px;font-size:11px;">~ FN</span>
+                <span class="text-muted small ms-1">Separated from group</span>
+              </span>
+            </div>
+            <div class="text-muted small mt-2" id="legend-ref-label"></div>
+          </div>
         </div>
       </div>
 
@@ -558,15 +579,18 @@ function populateRefDropdown() {
 }
 
 async function loadReferenceGroups() {
+  console.log('[loadReferenceGroups] called');
   try {
     const res = await fetch(`${DB_API}/api/reference_groups`);
-    if (!res.ok) return;
+    if (!res.ok) { console.warn('[loadReferenceGroups] non-OK response', res.status); return; }
     const refs = await res.json();
+    console.log('[loadReferenceGroups] response:', refs);
     refs.forEach(r => {
       GROUND_TRUTH_DATA[r._id] = { label: r.label, map: r.groups };
     });
     populateRefDropdown();
-  } catch (_) {
+  } catch (e) {
+    console.warn('[loadReferenceGroups] fetch failed (MongoDB not running?):', e);
     // MongoDB not running — keep hardcoded defaults
   }
 }
@@ -787,6 +811,12 @@ async function loadData() {
   hacCache             = {};
   fullMdsCoords        = null;
   ATTR_PERCENTILE_VALS = {};
+
+  // Clear any stale feature matrices in MongoDB so they are recomputed with the
+  // current JS TED formula on next use.
+  try {
+    await fetch(`${DB_API}/api/matrix/feature`, { method: 'DELETE' });
+  } catch (_) {}
 
   // Try MongoDB first (served by Flask API); fall back to JSON file
   let data;
@@ -1352,16 +1382,72 @@ function clusterFeatureProfile(members) {
 }
 
 // ─── Render: cluster cards ────────────────────────────────────────────────────
-function renderClusters(asgn, clusters, medoids) {
+const _STATUS_CFG = {
+  tp:      { bg: '#d4edda', fg: '#155724', icon: '✓ ' },
+  fp:      { bg: '#f8d7da', fg: '#721c24', icon: '✗ ' },
+  fn:      { bg: '#fff3cd', fg: '#856404', icon: '~ ' },
+  unknown: { bg: null,      fg: null,      icon: ''   },
+};
+
+function _chipStyle(idx, ci, med, statusResult) {
+  const c = col(ci);
+  if (!statusResult) {
+    return {
+      bg:      `${c}22`,
+      fg:      c,
+      border:  med ? `border-color:${c};` : '',
+      icon:    '',
+      tooltip: '',
+    };
+  }
+  const { statusMap, clusterMajority, refGroupDominant, refLabels } = statusResult;
+  const status = statusMap.get(idx) || 'unknown';
+  const cfg    = _STATUS_CFG[status];
+  const refGroup = refLabels[idx];
+  const majority = clusterMajority[ci];
+
+  let tooltip = '';
+  if (status === 'tp') {
+    tooltip = `Correctly placed — Reference: ${refGroup}`;
+  } else if (status === 'fp') {
+    tooltip = `Wrong cluster — Reference: ${refGroup}, Cluster majority: ${majority}`;
+  } else if (status === 'fn') {
+    const domCluster = refGroupDominant.get(refGroup);
+    tooltip = `Separated from group — Reference: ${refGroup}, Most of group is in Cluster ${domCluster + 1}`;
+  } else {
+    tooltip = 'No reference data';
+  }
+
+  return {
+    bg:      cfg.bg  || `${c}22`,
+    fg:      cfg.fg  || c,
+    border:  med ? `border-color:${cfg.fg || c};` : '',
+    icon:    cfg.icon,
+    tooltip,
+  };
+}
+
+let _clusterViewState = 'algo'; // 'algo' | 'true'
+let _lastRenderArgs   = null;
+
+function renderClusters(asgn, clusters, medoids, statusResult) {
+  _lastRenderArgs = { asgn, clusters, medoids, statusResult };
+  _clusterViewState = 'algo';
+  _updateToggleBtn();
+  _renderAlgoClusters(asgn, clusters, medoids, statusResult);
+}
+
+function _renderAlgoClusters(asgn, clusters, medoids, statusResult) {
   const medSet = new Set(medoids || []);
   document.getElementById('cluster-cards').innerHTML = clusters.map((members, ci) => {
     const c      = col(ci);
     const medoid = medoids ? dname(medoids[ci]) : null;
     const chips  = members.map(idx => {
-      const med = medSet.has(idx);
+      const med  = medSet.has(idx);
+      const s    = _chipStyle(idx, ci, med, statusResult);
+      const attr = s.tooltip ? ` title="${s.tooltip}"` : '';
       return `<span class="cluster-chip${med?' medoid-chip':''}"
-        style="background:${c}22;color:${c};${med?`border-color:${c};`:''}">
-        ${dname(idx)}${med?' ★':''}
+        style="background:${s.bg};color:${s.fg};${s.border}"${attr}>${s.icon}${dname(idx)}${med?' ★':''}
       </span>`;
     }).join('');
 
@@ -1393,6 +1479,74 @@ function renderClusters(asgn, clusters, medoids) {
         ${profileHtml}
       </div>`;
   }).join('');
+}
+
+function _renderTrueClusters(statusResult) {
+  if (!statusResult) return;
+  const { statusMap, refLabels, refGroupDominant } = statusResult;
+
+  // Group countries by reference label
+  const groups = new Map();
+  for (let i = 0; i < COUNTRIES.length; i++) {
+    const lbl = refLabels[i];
+    if (!lbl) continue;
+    if (!groups.has(lbl)) groups.set(lbl, []);
+    groups.get(lbl).push(i);
+  }
+
+  document.getElementById('cluster-cards').innerHTML =
+    [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([lbl, members], gi) => {
+      const c = col(gi);
+      const tpCount = members.filter(i => statusMap.get(i) === 'tp').length;
+      const chips = members.map(i => {
+        const status = statusMap.get(i) || 'unknown';
+        const cfg    = _STATUS_CFG[status];
+        const bg     = cfg.bg || `${c}22`;
+        const fg     = cfg.fg || c;
+        const s      = _STATUS_CFG[status];
+        const tooltip = status === 'tp'
+          ? `Correctly placed in cluster`
+          : status === 'fn'
+            ? `Separated — most of ${lbl} is in Cluster ${refGroupDominant.get(lbl) + 1}`
+            : `In wrong cluster`;
+        return `<span class="cluster-chip" style="background:${bg};color:${fg};" title="${tooltip}">${s.icon}${dname(i)}</span>`;
+      }).join('');
+
+      return `
+        <div class="mb-3 pb-3 border-bottom">
+          <div class="d-flex align-items-center gap-2 mb-1">
+            <span style="width:10px;height:10px;border-radius:50%;background:${c};display:inline-block;flex-shrink:0;"></span>
+            <strong style="color:${c}">${lbl}</strong>
+            <span class="text-muted" style="font-size:11px;">${members.length} countries</span>
+            <span class="badge" style="background:#d4edda;color:#155724;font-size:10px;">${tpCount}/${members.length} correct</span>
+          </div>
+          <div>${chips}</div>
+        </div>`;
+    }).join('');
+}
+
+function _updateToggleBtn() {
+  const btn = document.getElementById('show-true-clusters-btn');
+  if (!btn) return;
+  btn.textContent = _clusterViewState === 'algo' ? 'Show True Clusters' : 'Show Algorithm Clusters';
+}
+
+function _bindToggleBtn() {
+  const btn = document.getElementById('show-true-clusters-btn');
+  if (!btn || btn._bound) return;
+  btn._bound = true;
+  btn.addEventListener('click', () => {
+    if (!_lastRenderArgs) return;
+    const { asgn, clusters, medoids, statusResult } = _lastRenderArgs;
+    if (_clusterViewState === 'algo') {
+      _clusterViewState = 'true';
+      _renderTrueClusters(statusResult);
+    } else {
+      _clusterViewState = 'algo';
+      _renderAlgoClusters(asgn, clusters, medoids, statusResult);
+    }
+    _updateToggleBtn();
+  });
 }
 
 // ─── Save clustering run to MongoDB via Flask API ────────────────────────────
@@ -1527,7 +1681,23 @@ async function run() {
     extRow.classList.add('d-none');
   }
 
-  renderClusters(asgn, clusters, medoids);
+  const statusResult = computePerCountryStatus(asgn, clusters);
+  renderClusters(asgn, clusters, medoids, statusResult);
+  _bindToggleBtn();
+
+  // Legend + toggle button visibility
+  const legend    = document.getElementById('cluster-legend');
+  const toggleBtn = document.getElementById('show-true-clusters-btn');
+  const legendRef = document.getElementById('legend-ref-label');
+  const refKeyNow = document.getElementById('ref-data').value;
+  if (refKeyNow !== 'none' && statusResult) {
+    legend.classList.remove('d-none');
+    toggleBtn.classList.remove('d-none');
+    legendRef.textContent = `Reference: ${GROUND_TRUTH_DATA[refKeyNow]?.label || refKeyNow} — Cluster majority = most common reference group in that cluster`;
+  } else {
+    legend.classList.add('d-none');
+    toggleBtn.classList.add('d-none');
+  }
 
   // Save run to MongoDB (fire-and-forget — does not block the UI)
   const refKey2  = document.getElementById('ref-data').value;
@@ -1731,6 +1901,63 @@ function computeExternalMetrics(assignments, refLabels) {
   return { purity, precision, recall, fmeasure, covered: n, total: N };
 }
 
+// ─── Per-country TP/FP/FN status ─────────────────────────────────────────────
+function computePerCountryStatus(asgn, clusters) {
+  const refKey = document.getElementById('ref-data').value;
+  if (refKey === 'none') return null;
+
+  const refLabels = getRefLabels(refKey);
+  if (!refLabels) return null;
+
+  // For each cluster, find the majority reference group
+  const clusterMajority = clusters.map(members => {
+    const freq = new Map();
+    members.forEach(i => {
+      const lbl = refLabels[i];
+      if (lbl) freq.set(lbl, (freq.get(lbl) || 0) + 1);
+    });
+    if (!freq.size) return null;
+    return [...freq.entries()].sort((a, b) => b[1] - a[1])[0][0];
+  });
+
+  // Initial pass: TP if in majority cluster, FP otherwise
+  const statusMap = new Map();
+  for (let i = 0; i < COUNTRIES.length; i++) {
+    const myCluster = asgn[i];
+    const myRef     = refLabels[i];
+    const majority  = clusterMajority[myCluster];
+
+    if (!myRef) { statusMap.set(i, 'unknown'); continue; }
+    statusMap.set(i, myRef === majority ? 'tp' : 'fp');
+  }
+
+  // Find the dominant cluster for each reference group
+  const refGroupClusters = new Map();
+  for (let i = 0; i < COUNTRIES.length; i++) {
+    const lbl = refLabels[i];
+    if (!lbl) continue;
+    if (!refGroupClusters.has(lbl)) refGroupClusters.set(lbl, new Map());
+    const cf = refGroupClusters.get(lbl);
+    cf.set(asgn[i], (cf.get(asgn[i]) || 0) + 1);
+  }
+  const refGroupDominant = new Map();
+  refGroupClusters.forEach((cf, lbl) => {
+    refGroupDominant.set(lbl, [...cf.entries()].sort((a, b) => b[1] - a[1])[0][0]);
+  });
+
+  // Override FP → FN when country is not in the dominant cluster of its ref group
+  for (let i = 0; i < COUNTRIES.length; i++) {
+    const myRef = refLabels[i];
+    if (!myRef) continue;
+    const dominant = refGroupDominant.get(myRef);
+    if (asgn[i] !== dominant && statusMap.get(i) === 'fp') {
+      statusMap.set(i, 'fn');
+    }
+  }
+
+  return { statusMap, clusterMajority, refGroupDominant, refLabels };
+}
+
 // ─── TED helpers (for feature-based clustering) ───────────────────────────────
 function isLeaf(node) { return !node.children || node.children.length === 0; }
 function nodeLabel(node) { return String(node.label || ''); }
@@ -1778,12 +2005,12 @@ function makeTedContext(src, tgt) {
   const cache   = new Map();
 
   const costDel = (n, depth) => {
-    const base = tgtSubs.has(serializeNode(n)) ? 0 : 1;
+    const base = tgtSubs.has(serializeNode(n)) ? 1 : subtreeSize(n);
     const w    = (depth === 1) ? attrWeight(nodeLabel(n)) : 1.0;
     return base * w;
   };
   const costIns = (n, depth) => {
-    const base = srcSubs.has(serializeNode(n)) ? 0 : 1;
+    const base = srcSubs.has(serializeNode(n)) ? 1 : subtreeSize(n);
     const w    = (depth === 1) ? attrWeight(nodeLabel(n)) : 1.0;
     return base * w;
   };
@@ -1838,11 +2065,11 @@ function computeTedSim(t1, t2) {
   t1 = sortTree(t1);
   t2 = sortTree(t2);
   const { ted } = makeTedContext(t1, t2);
-  const attrs1 = (t1.children || []).length;
-  const attrs2 = (t2.children || []).length;
+  const size1  = subtreeSize(t1);
+  const size2  = subtreeSize(t2);
   const tedVal = ted(t1, t2);
-  const denom  = Math.max(attrs1, attrs2, 1);
-  return Math.max(0, 1 - tedVal / denom);
+  const denom  = size1 + size2 - tedVal;
+  return denom > 0 ? Math.max(0, 1 - tedVal / denom) : 1;
 }
 
 // ─── Feature-based clustering helpers ────────────────────────────────────────

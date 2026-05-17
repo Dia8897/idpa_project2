@@ -161,6 +161,13 @@ def list_matrices():
     return jsonify(docs)
 
 
+@app.delete("/api/matrix/feature")
+def clear_feature_matrices():
+    db = get_db()
+    result = db.matrix_computations.delete_many({"type": "feature"})
+    return jsonify({"deleted": result.deleted_count})
+
+
 @app.get("/api/trees")
 def get_all_trees():
     """Return all country trees in one request."""
