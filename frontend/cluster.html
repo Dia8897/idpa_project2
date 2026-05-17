@@ -466,6 +466,35 @@ let LAST_CLUSTERS    = null;
 let ALL_FEATURES     = [];
 let FEATURE_PRESETS  = [];      // loaded from MongoDB feature_presets collection
 let featuresLoaded   = false;   // true once the attr picker is populated
+
+// Feature picker hygiene: hide noisy, non-semantic, or ultra-rare attributes.
+const FEATURE_MIN_COVERAGE = 10;
+const FEATURE_EXCLUDE_REGEX = [
+  /^president_of_/,
+  /^speaker_of_/,
+  /^chair(man|woman)?_of_/,
+  /^vice_?president/,
+  /treaty/,
+  /declaration/,
+  /constitution/,
+  /coup/,
+  /republic/,
+  /^from_/,
+  /^recognized_by_/,
+  /^recognised_by_/,
+  /independence/,
+];
+
+function isFeatureAllowed(label, count) {
+  const raw = String(label || '').trim();
+  if (!raw) return false;
+  if (Number(count || 0) < FEATURE_MIN_COVERAGE) return false;
+  return !FEATURE_EXCLUDE_REGEX.some((rx) => rx.test(raw));
+}
+
+function filterFeaturesForPicker(features) {
+  return (features || []).filter(f => isFeatureAllowed(f.label, f.count));
+}
 let treesLoaded      = false;   // true once full tree data is loaded
 let ATTR_FREQ        = {};      // label → count across all tokenized trees
 
@@ -780,7 +809,7 @@ async function ensureFeaturesLoaded() {
     if (res.ok) {
       const data = await res.json();
       if (data && data.length) {
-        ALL_FEATURES = data; // already sorted by the server
+        ALL_FEATURES = filterFeaturesForPicker(data); // server-sorted, then cleaned for UI
         setupAttrPickerUI();
         console.log(JSON.stringify(ALL_FEATURES));
         await loadFeaturePresets();
@@ -1793,30 +1822,73 @@ async function runElbow() {
 
 function renderElbowChart(selector, ks, series, title) {
   const el = document.querySelector(selector);
-  const W  = el.clientWidth || 420;
-  const H  = 260, mg = { top: 36, right: 20, bottom: 38, left: 48 };
+  const W  = Math.max(460, el.clientWidth || 460);
+  const H  = 360, mg = { top: 42, right: 28, bottom: 110, left: 86 };
   const iw = W - mg.left - mg.right, ih = H - mg.top - mg.bottom;
 
   d3.select(selector).html('');
-  const svg = d3.select(selector).append('svg').attr('width', W).attr('height', H);
+  const svg = d3.select(selector).append('svg')
+    .attr('width', '100%')
+    .attr('height', 'auto')
+    .attr('viewBox', `0 0 ${W} ${H}`)
+    .attr('preserveAspectRatio', 'xMinYMin meet')
+    .style('display', 'block');
   const g   = svg.append('g').attr('transform', `translate(${mg.left},${mg.top})`);
 
   const xS = d3.scaleLinear().domain([d3.min(ks), d3.max(ks)]).range([0, iw]);
   const allVals = series.flatMap(s => s.values);
+  const minVal = Math.min(...allVals);
+  const maxVal = Math.max(...allVals);
+  const span = Math.max(1e-9, maxVal - minVal);
   const yS = d3.scaleLinear().domain([
-    Math.min(...allVals) * (Math.min(...allVals) >= 0 ? 0.85 : 1.1),
-    Math.max(...allVals) * 1.1
+    minVal - span * 0.12,
+    maxVal + span * 0.12
   ]).range([ih, 0]).nice();
 
-  // Grid
-  g.append('g').call(d3.axisLeft(yS).ticks(5).tickSize(-iw))
-    .call(a => { a.selectAll('.tick line').attr('stroke','#f0f0f0'); a.select('.domain').remove(); });
+  // Ultra-clean formatter + explicit ticks (min / mid / max) for readability
+  const yFmt = v => {
+    const abs = Math.abs(v);
+    if (abs >= 100) return d3.format('.0f')(v);
+    if (abs >= 10)  return d3.format('.1f')(v);
+    if (abs >= 1)   return d3.format('.2f')(v);
+    return d3.format('.3f')(v);
+  };
+  const yTicks = [
+    yS.domain()[0],
+    (yS.domain()[0] + yS.domain()[1]) / 2,
+    yS.domain()[1]
+  ];
 
   // Axes
-  g.append('g').attr('transform',`translate(0,${ih})`).call(d3.axisBottom(xS).tickValues(ks).tickFormat(d => 'k='+d))
+  g.append('g').attr('transform',`translate(0,${ih})`).call(d3.axisBottom(xS).tickValues(ks).tickFormat(d => `${d}`))
     .call(a => a.selectAll('text').attr('font-size','10px'));
-  g.append('g').call(d3.axisLeft(yS).ticks(5).tickFormat(d3.format('.3f')))
-    .call(a => a.selectAll('text').attr('font-size','10px'));
+
+  // Single Y-axis render: labels + grid together (prevents duplicate/overlapping labels)
+  g.append('g')
+    .call(d3.axisLeft(yS).tickValues(yTicks).tickFormat(yFmt).tickSize(-iw))
+    .call(a => {
+      a.selectAll('.tick line').attr('stroke', '#eef1f6');
+      a.selectAll('text').attr('font-size', '10px').attr('dx', '-0.25em');
+      a.select('.domain').attr('stroke', '#cfd6e4');
+    });
+
+  // Axis labels
+  g.append('text')
+    .attr('x', iw / 2)
+    .attr('y', ih + 40)
+    .attr('text-anchor', 'middle')
+    .attr('font-size', '11px')
+    .attr('fill', '#555')
+    .text('Number of clusters (k)');
+
+  g.append('text')
+    .attr('transform', 'rotate(-90)')
+    .attr('x', -ih / 2)
+    .attr('y', -50)
+    .attr('text-anchor', 'middle')
+    .attr('font-size', '11px')
+    .attr('fill', '#555')
+    .text('Metric value');
 
   // Title
   g.append('text').attr('x', iw/2).attr('y', -18)
@@ -1824,8 +1896,25 @@ function renderElbowChart(selector, ks, series, title) {
 
   const line = d3.line().x((_,i) => xS(ks[i])).y(v => yS(v)).curve(d3.curveMonotoneX);
 
-  // Legend layout: 2 entries per column (left / right)
-  const legendCols = [[0, iw / 2 - 90]];
+  // Clickable coordinate readout
+  const coordBox = g.append('g')
+    .attr('transform', `translate(${iw - 6}, -22)`)
+    .style('display', 'none');
+  coordBox.append('rect')
+    .attr('x', -210)
+    .attr('y', -10)
+    .attr('width', 210)
+    .attr('height', 18)
+    .attr('rx', 4)
+    .attr('fill', '#ffffff')
+    .attr('stroke', '#cfd6e4');
+  const coordText = coordBox.append('text')
+    .attr('x', -202)
+    .attr('y', 3)
+    .attr('font-size', '10px')
+    .attr('fill', '#2c3e50');
+
+  // Draw series
   series.forEach(({label, values, color, dash}, si) => {
     g.append('path').datum(values).attr('d', line(values))
       .attr('fill','none').attr('stroke', color).attr('stroke-width', 2.2)
@@ -1835,13 +1924,46 @@ function renderElbowChart(selector, ks, series, title) {
       .attr('cx', (_,i) => xS(ks[i])).attr('cy', v => yS(v))
       .attr('r', 4.5).attr('fill', color).attr('stroke','white').attr('stroke-width',1.5);
 
-    // Legend entry: 2 per row, left-col for even si, right-col for odd
-    const col = si % 2 === 0 ? 8 : iw - 100;
-    const row = Math.floor(si / 2) * 13;
-    g.append('line').attr('x1',col).attr('y1',-6-row).attr('x2',col+18).attr('y2',-6-row)
-      .attr('stroke',color).attr('stroke-width',2.2).attr('stroke-dasharray', dash || '');
-    g.append('circle').attr('cx',col+9).attr('cy',-6-row).attr('r',4).attr('fill',color);
-    g.append('text').attr('x',col+22).attr('y',-2-row).attr('font-size','10px').attr('fill','#444').text(label);
+    g.selectAll(null).data(values).join('circle')
+      .attr('cx', (_,i) => xS(ks[i])).attr('cy', v => yS(v))
+      .attr('r', 8)
+      .attr('fill', 'transparent')
+      .style('cursor', 'pointer')
+      .on('click', (_, v) => {
+        const i = values.indexOf(v);
+        coordText.text(`${label}: (k=${ks[i]}, y=${yFmt(v)})`);
+        coordBox.style('display', null);
+      });
+  });
+
+  // Legend below chart (prevents overlap/crowding with plot and ticks)
+  const legend = g.append('g').attr('transform', `translate(0, ${ih + 62})`);
+  const cols = Math.min(series.length, 2);
+  const colW = iw / cols;
+  series.forEach(({ label, color, dash }, i) => {
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    const x = col * colW + 6;
+    const y = row * 18;
+    legend.append('line')
+      .attr('x1', x)
+      .attr('y1', y)
+      .attr('x2', x + 18)
+      .attr('y2', y)
+      .attr('stroke', color)
+      .attr('stroke-width', 2.2)
+      .attr('stroke-dasharray', dash || '');
+    legend.append('circle')
+      .attr('cx', x + 9)
+      .attr('cy', y)
+      .attr('r', 3.5)
+      .attr('fill', color);
+    legend.append('text')
+      .attr('x', x + 24)
+      .attr('y', y + 3)
+      .attr('font-size', '10px')
+      .attr('fill', '#444')
+      .text(label);
   });
 }
 
@@ -2158,6 +2280,7 @@ function buildAttrPicker() {
   );
   ALL_FEATURES = [...freq.entries()]
     .map(([label, count]) => ({ label, count }))
+    .filter(({ label, count }) => isFeatureAllowed(label, count))
     .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
   setupAttrPickerUI();
   console.log(JSON.stringify(ALL_FEATURES));

@@ -289,7 +289,11 @@ async function loadCountries() {
   const csvText = await res.text();
   const rows = parseCSV(csvText);
   return rows
-    .map((r) => r.country_name && r.country_name.trim())
+    .filter((r) => {
+      const name = r.country_name && r.country_name.trim();
+      return Boolean(name);
+    })
+    .map((r) => r.country_name.trim())
     .filter(Boolean)
     .sort((a, b) => a.localeCompare(b));
 }
