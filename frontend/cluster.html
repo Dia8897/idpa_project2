@@ -584,14 +584,9 @@ const GROUND_TRUTH_DATA = {
   },
   un_regions: {
     label: 'UN Regions (5)',
-    map: {} // filled below from continents map by merging N+S America → Americas
+    map: {} // overwritten by MongoDB; empty map used as fallback when DB is unavailable
   }
 };
-// Build UN 5-region map: merge North/South America into Americas
-Object.entries(GROUND_TRUTH_DATA.continents.map).forEach(([k, v]) => {
-  GROUND_TRUTH_DATA.un_regions.map[k] =
-    (v === 'North America' || v === 'South America') ? 'Americas' : v;
-});
 
 function populateRefDropdown() {
   const sel = document.getElementById('ref-data');
@@ -1466,6 +1461,35 @@ function renderClusters(asgn, clusters, medoids, statusResult) {
   _renderAlgoClusters(asgn, clusters, medoids, statusResult);
 }
 
+function computeClusterStats(members) {
+  const hdiVals = [], gdpVals = [];
+  members.forEach(idx => {
+    const tree = TREES_RAW[idx];
+    if (!tree) return;
+    const hdiNode = (tree.children || []).find(c => nodeLabel(c) === 'hdi');
+    if (hdiNode) {
+      const collect = n => {
+        if (isLeaf(n)) { const v = parseNumericValue(nodeLabel(n)); if (v != null && v > 0 && v <= 1) hdiVals.push(v); }
+        (n.children || []).forEach(collect);
+      };
+      collect(hdiNode);
+    }
+    const gdpNode = (tree.children || []).find(c => nodeLabel(c) === 'per_capita');
+    if (gdpNode) {
+      const collect = n => {
+        if (isLeaf(n)) { const v = parseNumericValue(nodeLabel(n)); if (v != null && v > 100 && v < 200000) gdpVals.push(v); }
+        (n.children || []).forEach(collect);
+      };
+      collect(gdpNode);
+    }
+  });
+  const avgHdi = hdiVals.length ? (hdiVals.reduce((s,v) => s+v, 0) / hdiVals.length).toFixed(3) : null;
+  const avgGdp = gdpVals.length ? Math.round(gdpVals.reduce((s,v) => s+v, 0) / gdpVals.length).toLocaleString() : null;
+  const minGdp = gdpVals.length ? Math.round(Math.min(...gdpVals)).toLocaleString() : null;
+  const maxGdp = gdpVals.length ? Math.round(Math.max(...gdpVals)).toLocaleString() : null;
+  return { avgHdi, avgGdp, minGdp, maxGdp, hdiCount: hdiVals.length, gdpCount: gdpVals.length };
+}
+
 function _renderAlgoClusters(asgn, clusters, medoids, statusResult) {
   const medSet = new Set(medoids || []);
   document.getElementById('cluster-cards').innerHTML = clusters.map((members, ci) => {
@@ -1479,6 +1503,19 @@ function _renderAlgoClusters(asgn, clusters, medoids, statusResult) {
         style="background:${s.bg};color:${s.fg};${s.border}"${attr}>${s.icon}${dname(idx)}${med?' ★':''}
       </span>`;
     }).join('');
+
+    // Economic stats — only in selected-features mode (ACTIVE_ATTRS set) when trees are loaded
+    const statsHtml = (ACTIVE_ATTRS && TREES_RAW.length) ? (() => {
+      const { avgHdi, avgGdp, minGdp, maxGdp } = computeClusterStats(members);
+      if (!avgHdi && !avgGdp) return '';
+      return `<div class="cluster-stats mt-2 pt-2 border-top">
+        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#6c757d;margin-bottom:4px;">Cluster Statistics</div>
+        <div style="font-size:11px;">
+          ${avgHdi ? `<span>Avg HDI: <b>${avgHdi}</b></span>` : ''}
+          ${avgGdp ? `<span class="ms-3">Avg GDP/capita: <b>$${avgGdp}</b> <span class="text-muted">($${minGdp} – $${maxGdp})</span></span>` : ''}
+        </div>
+      </div>`;
+    })() : '';
 
     const profile = clusterFeatureProfile(members);
     const profileHtml = profile && profile.length ? `
@@ -1505,6 +1542,7 @@ function _renderAlgoClusters(asgn, clusters, medoids, statusResult) {
           ${medoid ? `<span class="badge" style="background:${c}22;color:${c};border:1px solid ${c}44;font-size:10px;font-weight:600;">medoid: ${medoid}</span>` : ''}
         </div>
         <div>${chips}</div>
+        ${statsHtml}
         ${profileHtml}
       </div>`;
   }).join('');
@@ -1971,7 +2009,14 @@ function renderElbowChart(selector, ks, series, title) {
 function getRefLabels(refKey) {
   const gt = GROUND_TRUTH_DATA[refKey];
   if (!gt) return null;
-  return COUNTRIES.map(name => gt.map[name] || null);
+  return COUNTRIES.map(name => {
+    if (gt.map[name]) return gt.map[name];
+    const spaced = name.replace(/_/g, ' ');
+    if (gt.map[spaced]) return gt.map[spaced];
+    const underscored = name.replace(/ /g, '_');
+    if (gt.map[underscored]) return gt.map[underscored];
+    return null;
+  });
 }
 
 function computeExternalMetrics(assignments, refLabels) {
@@ -2255,6 +2300,7 @@ async function loadAllTrees() {
       TREES_RAW = COUNTRIES.map(name => sortTree(byName[name]?.display_tree?.tree   || { label: name, children: [] }));
       _buildAttrFreq();
       buildPercentileLookup();
+      _logGovNodes();
       return;
     }
   } catch (_) { /* API not running — fall through to individual files */ }
@@ -2268,6 +2314,20 @@ async function loadAllTrees() {
   TREES_RAW = rawData.map(d => sortTree(d.tree));
   _buildAttrFreq();
   buildPercentileLookup();
+  _logGovNodes();
+}
+
+function _logGovNodes() {
+  const check = name => {
+    const i = COUNTRIES.indexOf(name);
+    if (i === -1) { console.log(`${name}: not found in COUNTRIES`); return; }
+    const tree   = TREES_TOK[i];
+    const govNode = (tree.children || []).find(c => nodeLabel(c) === 'government');
+    console.log(`${name} government tokens:`, JSON.stringify(govNode, null, 2));
+  };
+  check('Lebanon');
+  check('France');
+  check('Saudi_Arabia');
 }
 
 function buildAttrPicker() {
@@ -2284,6 +2344,28 @@ function buildAttrPicker() {
     .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
   setupAttrPickerUI();
   console.log(JSON.stringify(ALL_FEATURES));
+
+  // Debug: confirm COUNTRIES is populated and check name format
+  console.log('COUNTRIES.length:', COUNTRIES.length, '| sample:', COUNTRIES.slice(90, 95));
+
+  // Check government tokenization for selected countries
+  const countriesToCheck = ['Lebanon', 'France', 'Saudi_Arabia', 'United_States', 'China'];
+
+  countriesToCheck.forEach(name => {
+    const idx = COUNTRIES.indexOf(name);
+    console.log(`indexOf('${name}') =`, idx);
+    if (idx < 0) return;
+
+    const tree = TREES_TOK[idx];
+    const govNode = (tree.children || [])
+      .find(c => nodeLabel(c) === 'government');
+    const legNode = (tree.children || [])
+      .find(c => nodeLabel(c) === 'legislature');
+
+    console.log(`=== ${name} ===`);
+    console.log('government:', JSON.stringify(govNode));
+    console.log('legislature:', JSON.stringify(legNode));
+  });
 }
 
 function renderAttrOptions(query = '') {
