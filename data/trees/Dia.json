@@ -1,0 +1,17 @@
+{
+  "country_name": "Dia",
+  "tree": {
+    "label": "country",
+    "children": [
+      {
+        "label": "age",
+        "children": [
+          {
+            "label": "20",
+            "children": []
+          }
+        ]
+      }
+    ]
+}
+}

@@ -1,0 +1,16 @@
+ {"country_name": "Rita",
+  "tree": {
+    "label": "country",
+    "children": [
+      {
+        "label": "age",
+        "children": [
+          {
+            "label": "100",
+            "children": []
+          }
+        ]
+    }
+]
+  }
+}

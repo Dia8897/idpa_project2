@@ -617,6 +617,7 @@ applyEmbedMode();
 
 // ─── State ───────────────────────────────────────────────────────────────────
 let COUNTRIES = [], MATRIX = [], N = 0;
+let FULL_COUNTRIES = [], FULL_MATRIX = [];
 let mdsCoords     = null;   // active MDS projection
 let fullMdsCoords = null;   // MDS on full precomputed matrix (never changes)
 let hacCache      = {};     // linkage -> {merges, n}
@@ -626,6 +627,7 @@ let TREES_RAW     = [];     // non-tokenized trees for human-readable stats
 let FEAT_MATRIX   = null;   // feature-specific similarity matrix
 let ACTIVE_MATRIX = null;   // points to MATRIX or FEAT_MATRIX
 let ACTIVE_ATTRS  = null;   // Set of selected attribute labels, or null in full-tree mode
+let selectedFeatureUsesExtraCountries = false;
 let LAST_ASSIGNMENTS = null;
 let LAST_CLUSTERS    = null;
 let ALL_FEATURES     = [];
@@ -686,6 +688,18 @@ const PALETTE = [
 ];
 const col   = i => PALETTE[i % PALETTE.length];
 const dname = i => COUNTRIES[i].replace(/_/g, ' ');
+
+function setActiveCountryList(countries) {
+  COUNTRIES = countries.slice();
+  N = COUNTRIES.length;
+  const kSlider = document.getElementById('k-slider');
+  const kInput  = document.getElementById('k-input');
+  const maxK    = Math.max(2, N);
+  if (kSlider) kSlider.max = String(maxK);
+  if (kInput)  kInput.max  = String(maxK);
+  syncKControls(kInput?.value || kSlider?.value || 5, true);
+  populateCountrySearchList();
+}
 
 // Reference datasets are loaded only from MongoDB via /api/reference_groups.
 // Shape: { [id]: { label: string, map: { [countryName]: groupName } } }
@@ -964,17 +978,11 @@ async function loadData() {
     data = await resp.json();
   }
 
-  COUNTRIES     = data.countries;
-  MATRIX        = data.matrix;
-  N             = COUNTRIES.length;
+  FULL_COUNTRIES = data.countries;
+  FULL_MATRIX    = data.matrix;
+  MATRIX         = FULL_MATRIX;
+  setActiveCountryList(FULL_COUNTRIES);
   ACTIVE_MATRIX = MATRIX;
-  const kSlider = document.getElementById('k-slider');
-  const kInput  = document.getElementById('k-input');
-  const maxK    = Math.max(2, N);
-  if (kSlider) kSlider.max = String(maxK);
-  if (kInput)  kInput.max  = String(maxK);
-  syncKControls(kInput?.value || kSlider?.value || 5, true);
-  populateCountrySearchList();
 
   // Try loading cached MDS coords from DB — skip recomputing if available
   let mdsFromDB = false;
@@ -2779,6 +2787,29 @@ async function loadAllTrees() {
   _logGovNodes();
 }
 
+async function loadSelectedFeatureTreesFromMongo() {
+  const res = await fetch(`${DB_API}/api/trees`);
+  if (!res.ok) throw new Error('Could not load country trees from MongoDB.');
+
+  const docs = await res.json();
+  const byName = Object.fromEntries(docs.map(d => [d.name, d]));
+  const dbCountries = docs.map(d => d.name).filter(Boolean);
+  const baseCountries = FULL_COUNTRIES.length ? FULL_COUNTRIES : COUNTRIES;
+  const baseSet = new Set(baseCountries);
+  const extraCountries = dbCountries
+    .filter(name => name && !baseSet.has(name))
+    .sort((a, b) => a.localeCompare(b));
+
+  selectedFeatureUsesExtraCountries = extraCountries.length > 0;
+  setActiveCountryList([...baseCountries, ...extraCountries]);
+
+  TREES_TOK = COUNTRIES.map(name => sortTree(byName[name]?.tokenized_tree?.tree || { label: name, children: [] }));
+  TREES_RAW = COUNTRIES.map(name => sortTree(byName[name]?.display_tree?.tree   || { label: name, children: [] }));
+  treesLoaded = true;
+  _buildAttrFreq();
+  buildPercentileLookup();
+}
+
 function _logGovNodes() {
   const check = name => {
     const i = COUNTRIES.indexOf(name);
@@ -3263,6 +3294,9 @@ document.querySelectorAll('input[name="feat-mode"]').forEach(r =>
       if (!FEATURE_PRESETS.length) await loadFeaturePresets();
       updateRunButtonState();
     } else {
+      setActiveCountryList(FULL_COUNTRIES);
+      MATRIX = FULL_MATRIX;
+      selectedFeatureUsesExtraCountries = false;
       if (ACTIVE_MATRIX !== MATRIX) {
         ACTIVE_MATRIX = MATRIX;
         ACTIVE_ATTRS  = null;
@@ -3292,7 +3326,12 @@ document.getElementById('feat-none-btn').addEventListener('click', () => {
 });
 
 document.getElementById('feat-compute-btn').addEventListener('click', async () => {
-  await ensureTreesLoaded();
+  try {
+    await loadSelectedFeatureTreesFromMongo();
+  } catch (err) {
+    console.warn(err);
+    await ensureTreesLoaded();
+  }
   const checked = [...SELECTED_FEATURES];
   if (!checked.length) return;
   const selectedSet = new Set(checked);
@@ -3317,14 +3356,17 @@ document.getElementById('feat-compute-btn').addEventListener('click', async () =
       if (cached && cached.matrix && cached.countries) {
         // Reorder rows/cols to match current COUNTRIES order
         const cachedIndex = name => cached.countries.indexOf(name);
-        FEAT_MATRIX = COUNTRIES.map(a =>
-          COUNTRIES.map(b => {
-            const i = cachedIndex(a), j = cachedIndex(b);
-            return (i >= 0 && j >= 0) ? cached.matrix[i][j] : 0;
-          })
-        );
-        loadedFromCache = true;
-        document.getElementById('feat-progress-text').textContent = 'Loaded from cache!';
+        const cacheCoversCurrentCountries = COUNTRIES.every(name => cachedIndex(name) >= 0);
+        if (cacheCoversCurrentCountries) {
+          FEAT_MATRIX = COUNTRIES.map(a =>
+            COUNTRIES.map(b => {
+              const i = cachedIndex(a), j = cachedIndex(b);
+              return cached.matrix[i][j];
+            })
+          );
+          loadedFromCache = true;
+          document.getElementById('feat-progress-text').textContent = 'Loaded from cache!';
+        }
       }
     }
   } catch (_) { /* API not running — fall through to compute */ }
