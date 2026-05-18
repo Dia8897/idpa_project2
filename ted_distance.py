@@ -276,13 +276,10 @@ def ted_distance(tree1: dict, tree2: dict):
 
     distance = round3(raw_dist)
 
-    # Attribute-count normalization: 1 - ted / max(attrs1, attrs2, 1)
+    # Whole-tree normalized similarity: 1 - TED / (|C| + |D|).
     # Matches computeTedSim() in cluster.html — fair comparison regardless of
     # tree size differences between countries.
-    attrs1 = len(a.get("children", []))
-    attrs2 = len(b.get("children", []))
-    denom  = max(attrs1, attrs2, 1)
-    similarity = round3(max(0.0, 1.0 - distance / denom))
+    similarity = round3(normalized_similarity(distance, size1, size2))
     similarity_formula1 = round3(slide_similarity_formula1(distance))
     common_score = round3((size1 + size2 - distance) / 2)
 

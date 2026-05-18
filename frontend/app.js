@@ -1,4 +1,5 @@
 const DATA_ROOT = "../data";
+const DB_API = "http://localhost:5050";
 const DISPLAY_TREE_DIR = "trees"; // non-token trees for UI
 const TED_TREE_DIR = "trees_tokens"; // tokenized trees for similarity
 // for trees: onCompare(): loads 2 trees, builds the edit scripts and computes the TED metrics
@@ -1280,6 +1281,22 @@ function computeTedMetrics(tree1, tree2) {
   };
 }
 
+async function computeBackendTedMetrics(source, target) {
+  const url = `${DB_API}/api/ted?source=${encodeURIComponent(source)}&target=${encodeURIComponent(target)}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("Backend TED unavailable");
+  const data = await res.json();
+  return {
+    size1: Number(data.size1 || 0),
+    size2: Number(data.size2 || 0),
+    totalNodes: Number(data.size1 || 0) + Number(data.size2 || 0),
+    distance: Number(data.distance || 0),
+    commonScore: Number(data.common_score || 0),
+    normalizedSimilarity: Number(data.normalized_similarity || 0),
+    weighted: true,
+  };
+}
+
 function buildEditScript(t1, t2) {
   const ops = [];
   const { ted, forestDp, costDelTree } = makeTedContext(t1, t2);
@@ -1617,7 +1634,8 @@ function renderTransform(opsForDisplay, opsForTed = opsForDisplay, tedMetrics = 
 
   if (els.scoreValue) {
     els.scoreValue.textContent = `${(metrics.normalizedSimilarity * 100).toFixed(2)}%`;
-    els.scoreExplain.textContent = `Normalized similarity: 1 - TED / (|C| + |D|) = 1 - ${metrics.distance} / (${metrics.size1} + ${metrics.size2}).`;
+    const weightedText = metrics.weighted ? " Coverage-weighted backend TED." : "";
+    els.scoreExplain.textContent = `Normalized similarity: 1 - TED / (|C| + |D|) = 1 - ${metrics.distance} / (${metrics.size1} + ${metrics.size2}).${weightedText}`;
   }
 
   const filter = els.opFilter?.value || "ALL";
@@ -1805,7 +1823,14 @@ async function onCompare() {
 
     const opsDisplay = buildEditScript(displaySourceForCompare, displayTargetForCompare); // readable diff
     const opsToken = buildEditScript(tedSourceForCompare, tedTargetForCompare); // tokenized diff for TED
-    const tedMetrics = computeTedMetrics(tedSourceForCompare, tedTargetForCompare);
+    let tedMetrics = computeTedMetrics(tedSourceForCompare, tedTargetForCompare);
+    if (!useSelected) {
+      try {
+        tedMetrics = await computeBackendTedMetrics(source, target);
+      } catch (e) {
+        console.warn(e);
+      }
+    }
     const nodeMaps = buildNodeTransformMaps(opsDisplay);
     renderTransform.sourceNodeCount = countNodes(tedSourceForCompare);
     renderTransform.targetNodeCount = countNodes(tedTargetForCompare);

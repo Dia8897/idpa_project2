@@ -21,9 +21,47 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 from db_config import get_db
 from save_clustering import get_recent_runs, save_run
+from ted_distance import load_tree, node_label, set_attr_weights, ted_distance
 
 app = Flask(__name__)
 CORS(app)  # allow requests from the frontend (localhost:8000)
+
+TREE_TOKEN_DIR = Path(__file__).parent.parent / "data" / "trees_tokens"
+_ATTR_FREQ_CACHE = None
+_TREE_PATH_CACHE = None
+
+
+def _tree_paths_by_country():
+    global _TREE_PATH_CACHE
+    if _TREE_PATH_CACHE is None:
+        _TREE_PATH_CACHE = {p.stem: p for p in TREE_TOKEN_DIR.glob("*.json")}
+    return _TREE_PATH_CACHE
+
+
+def _build_attr_freq():
+    global _ATTR_FREQ_CACHE
+    if _ATTR_FREQ_CACHE is not None:
+        return _ATTR_FREQ_CACHE
+    freq = {}
+    for path in _tree_paths_by_country().values():
+        tree = load_tree(path)
+        for child in tree.get("children", []):
+            label = node_label(child)
+            freq[label] = freq.get(label, 0) + 1
+    _ATTR_FREQ_CACHE = freq
+    return freq
+
+
+def _country_tree_path(country):
+    paths = _tree_paths_by_country()
+    candidates = [
+        str(country or ""),
+        str(country or "").replace(" ", "_"),
+    ]
+    for candidate in candidates:
+        if candidate in paths:
+            return paths[candidate]
+    return None
 
 
 @app.post("/api/clustering")
@@ -180,6 +218,27 @@ def clear_feature_matrices():
     db = get_db()
     result = db.matrix_computations.delete_many({"type": "feature"})
     return jsonify({"deleted": result.deleted_count})
+
+
+@app.get("/api/ted")
+def weighted_ted_pair():
+    """Compute weighted backend TED for one whole-tree country pair."""
+    source = request.args.get("source", "")
+    target = request.args.get("target", "")
+    source_path = _country_tree_path(source)
+    target_path = _country_tree_path(target)
+    if not source_path or not target_path:
+        return jsonify({"error": "source or target country not found"}), 404
+
+    paths = _tree_paths_by_country()
+    set_attr_weights(_build_attr_freq(), len(paths))
+    result = ted_distance(load_tree(source_path), load_tree(target_path))
+    return jsonify({
+        "source": source_path.stem,
+        "target": target_path.stem,
+        "weighted": True,
+        **result,
+    })
 
 
 @app.get("/api/trees")
