@@ -106,8 +106,9 @@ def lookup_matrix():
 
     db = get_db()
     doc = db.matrix_computations.find_one(
-        {"attributes": requested},
-        {"_id": 0}   # exclude _id so JSON serialization is simple
+        {"type": "feature", "attributes": requested},
+        {"_id": 0},  # exclude _id so JSON serialization is simple
+        sort=[("timestamp", -1)]
     )
     if doc:
         # convert datetime to string so Flask can serialize it
@@ -142,6 +143,19 @@ def save_matrix():
         "countries":   countries,
         "matrix":      matrix,
     }
+    if matrix_type == "feature":
+        result = db.matrix_computations.replace_one(
+            {"type": "feature", "attributes": sorted(attributes)},
+            doc,
+            upsert=True,
+        )
+        return jsonify({
+            "saved": True,
+            "matched": result.matched_count,
+            "modified": result.modified_count,
+            "upserted_id": str(result.upserted_id) if result.upserted_id else None,
+        }), 201
+
     result = db.matrix_computations.insert_one(doc)
     return jsonify({"saved": True, "id": str(result.inserted_id)}), 201
 
@@ -214,6 +228,32 @@ def save_mds():
     db.mds_cache.replace_one(
         {"type": "full"},
         {"type": "full", "x": body["x"], "y": body["y"]},
+        upsert=True,
+    )
+    return jsonify({"saved": True}), 201
+
+
+@app.get("/api/hac")
+def get_hac():
+    """Return cached HAC merge history for the full matrix and linkage."""
+    linkage = request.args.get("linkage", "average")
+    db = get_db()
+    doc = db.hac_cache.find_one({"type": "full", "linkage": linkage}, {"_id": 0})
+    if doc:
+        return jsonify({"merges": doc["merges"], "n": doc["n"]})
+    return jsonify(None), 404
+
+
+@app.post("/api/hac")
+def save_hac():
+    """Cache HAC merge history for the full matrix and linkage."""
+    body = request.get_json(silent=True)
+    if not body or "linkage" not in body or "merges" not in body or "n" not in body:
+        return jsonify({"error": "linkage, merges, and n required"}), 400
+    db = get_db()
+    db.hac_cache.replace_one(
+        {"type": "full", "linkage": body["linkage"]},
+        {"type": "full", "linkage": body["linkage"], "merges": body["merges"], "n": body["n"]},
         upsert=True,
     )
     return jsonify({"saved": True}), 201

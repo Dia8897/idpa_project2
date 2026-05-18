@@ -454,13 +454,13 @@
       <div class="col-6 col-sm-3">
         <div class="stat-box">
           <div class="stat-value text-success" id="stat-sil">-</div>
-          <div class="stat-label">Silhouette Score <small class="text-muted">(higher better)</small></div>
+          <div class="stat-label" id="stat-sil-label">Silhouette Score</div>
         </div>
       </div>
       <div class="col-6 col-sm-3">
         <div class="stat-box">
           <div class="stat-value text-warning" id="stat-db">-</div>
-          <div class="stat-label">Davies-Bouldin <small class="text-muted">(lower better)</small></div>
+          <div class="stat-label" id="stat-db-label">Davies-Bouldin Score</div>
         </div>
       </div>
       <div class="col-6 col-sm-3">
@@ -1157,6 +1157,33 @@ function computeHAC(linkage) {
   return hacCache[linkage];
 }
 
+async function ensureHAC(linkage) {
+  if (hacCache[linkage]) return hacCache[linkage];
+
+  if (ACTIVE_MATRIX === MATRIX) {
+    try {
+      const res = await fetch(`${DB_API}/api/hac?linkage=${encodeURIComponent(linkage)}`);
+      if (res.ok) {
+        const cached = await res.json();
+        if (cached && cached.merges && cached.n === N) {
+          hacCache[linkage] = cached;
+          return cached;
+        }
+      }
+    } catch (_) {}
+  }
+
+  const result = computeHAC(linkage);
+  if (ACTIVE_MATRIX === MATRIX) {
+    fetch(`${DB_API}/api/hac`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ linkage, merges: result.merges, n: result.n }),
+    }).catch(() => {});
+  }
+  return result;
+}
+
 //Given the merge history, cuts the dendrogram to produce exactly k clusters. 
 // It replays the merges one by one and stops after n - k merges.
 function hacCut(result, k) {
@@ -1227,7 +1254,7 @@ function findCutForK(hacRes, targetK) {
 }
 
 function initCutSlider(linkage) {
-  const hacRes = computeHAC(linkage);
+  const hacRes = hacCache[linkage] || computeHAC(linkage);
   const maxD   = hacRes.merges[hacRes.merges.length - 1]?.distance || 1;
   const slider = document.getElementById('cut-slider');
   slider.max   = maxD.toFixed(6);
@@ -1334,6 +1361,16 @@ function daviesBouldin(asgn) {
 }
 
 // ─── Classical MDS ────────────────────────────────────────────────────────────
+function adjustedSilhouetteScore(rawSilhouette) {
+  if (!Number.isFinite(rawSilhouette)) return 0;
+  return Math.max(0, Math.min(1, (rawSilhouette + 1) / 2));
+}
+
+function adjustedDaviesBouldinScore(rawDaviesBouldin) {
+  if (!Number.isFinite(rawDaviesBouldin) || rawDaviesBouldin < 0) return 0;
+  return 1 / (1 + rawDaviesBouldin);
+}
+
 function classicalMDS() {
   // Squared distance matrix
   const D2 = Array.from({length: N}, (_, i) => Array.from({length: N}, (_, j) => dist(i,j) ** 2));
@@ -2070,7 +2107,7 @@ async function saveClusteringRun(algorithm, assignments, internalMetrics, extern
 
 async function saveFeatureMatrix(selectedAttrs, countries, matrix) {
   try {
-    await fetch(`${DB_API}/api/matrix`, {
+    const res = await fetch(`${DB_API}/api/matrix`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({
@@ -2080,6 +2117,7 @@ async function saveFeatureMatrix(selectedAttrs, countries, matrix) {
         matrix:     matrix,
       }),
     });
+    return res.ok;
   } catch (_) { /* API not running — skip silently */ }
 }
 
@@ -2111,7 +2149,7 @@ async function run() {
       document.getElementById('loading-msg').textContent = `Computing HAC (${linkage})…`;
       document.getElementById('loading').style.display = 'flex';
       await tick();
-      computeHAC(linkage);
+      await ensureHAC(linkage);
       initCutSlider(linkage);
       document.getElementById('loading').style.display = 'none';
     }
@@ -2126,8 +2164,10 @@ async function run() {
   }
 
   // Evaluation
-  const sil = silhouette(asgn);
-  const db  = daviesBouldin(asgn);
+  const silRaw = silhouette(asgn);
+  const dbRaw  = daviesBouldin(asgn);
+  const sil = adjustedSilhouetteScore(silRaw);
+  const db  = adjustedDaviesBouldinScore(dbRaw);
 
   LAST_ASSIGNMENTS = asgn;
   LAST_CLUSTERS = clusters;
@@ -2136,6 +2176,8 @@ async function run() {
   document.getElementById('stat-k').textContent          = k;
   document.getElementById('stat-sil').textContent        = sil.toFixed(3);
   document.getElementById('stat-db').textContent         = db.toFixed(3);
+  document.getElementById('stat-sil-label').title        = `Raw silhouette: ${silRaw.toFixed(3)}. Adjusted = (raw + 1) / 2.`;
+  document.getElementById('stat-db-label').title         = `Raw Davies-Bouldin: ${dbRaw.toFixed(3)}. Adjusted = 1 / (1 + raw).`;
   document.getElementById('stat-extra').textContent      = extraVal;
   document.getElementById('stat-extra-label').textContent = extraLabel;
 
@@ -2183,7 +2225,12 @@ async function run() {
   // Save run to MongoDB (fire-and-forget — does not block the UI)
   const refKey2  = document.getElementById('ref-data').value;
   const extFinal = (refKey2 && GROUND_TRUTH_DATA[refKey2]) ? computeExternalMetrics(asgn, getRefLabels(refKey2)) : null;
-  saveClusteringRun(algo, asgn, { silhouette: sil, davies_bouldin: db }, extFinal);
+  saveClusteringRun(algo, asgn, {
+    silhouette: sil,
+    davies_bouldin: db,
+    raw_silhouette: silRaw,
+    raw_davies_bouldin: dbRaw,
+  }, extFinal);
 
   sp.classList.add('d-none');
   updateRunButtonState();
@@ -2201,18 +2248,18 @@ async function runElbow() {
   const kmPrecision = [], kmRecall = [], kmFmeasure = [];
   const hacPrecision = [], hacRecall = [], hacFmeasure = [];
 
-  const hacRes    = computeHAC('average');
+  const hacRes    = await ensureHAC('average');
   const refKey    = document.getElementById('ref-data').value;
   const refLabels = (refKey && GROUND_TRUTH_DATA[refKey]) ? getRefLabels(refKey) : null;
 
   for (const k of ks) {
     const km  = kmedoids(k, 42);
-    kmSil.push(silhouette(km.assignments));
-    kmDB.push(daviesBouldin(km.assignments));
+    kmSil.push(adjustedSilhouetteScore(silhouette(km.assignments)));
+    kmDB.push(adjustedDaviesBouldinScore(daviesBouldin(km.assignments)));
 
     const cut = hacCut(hacRes, k);
-    hacSil.push(silhouette(cut.assignments));
-    hacDB.push(daviesBouldin(cut.assignments));
+    hacSil.push(adjustedSilhouetteScore(silhouette(cut.assignments)));
+    hacDB.push(adjustedDaviesBouldinScore(daviesBouldin(cut.assignments)));
 
     const kmExt  = refLabels ? computeExternalMetrics(km.assignments,  refLabels) : null;
     const hacExt = refLabels ? computeExternalMetrics(cut.assignments, refLabels) : null;
@@ -2228,11 +2275,11 @@ async function runElbow() {
   renderElbowChart('#elbow-sil', ks, [
     { label: 'K-Medoids', values: kmSil,  color: '#4e79a7' },
     { label: 'HAC (avg)', values: hacSil, color: '#f28e2b' },
-  ], 'Silhouette Score  (higher = better)');
+  ], 'Silhouette Score');
   renderElbowChart('#elbow-db', ks, [
     { label: 'K-Medoids', values: kmDB,  color: '#4e79a7' },
     { label: 'HAC (avg)', values: hacDB, color: '#f28e2b' },
-  ], 'Davies-Bouldin Index  (lower = better)');
+  ], 'Davies-Bouldin Score');
 
   // Remove any previously rendered external charts / note
   const elbowCharts = document.getElementById('elbow-charts');
@@ -3150,8 +3197,7 @@ document.querySelectorAll('input[name="algo"]').forEach(r =>
     document.getElementById('hac-cut-params').classList.toggle('d-none', !isHAC);
     if (isHAC) {
       const linkage = document.getElementById('hac-linkage').value;
-      computeHAC(linkage);
-      initCutSlider(linkage);
+      ensureHAC(linkage).then(() => initCutSlider(linkage));
     }
   })
 );
@@ -3224,7 +3270,7 @@ document.querySelectorAll('input[name="feat-mode"]').forEach(r =>
         mdsCoords     = fullMdsCoords;
         // Auto-compute best HAC cut for the full matrix
         const currentLinkage = document.getElementById('hac-linkage').value;
-        computeHAC(currentLinkage);
+        await ensureHAC(currentLinkage);
         initCutSlider(currentLinkage);
         run();
       }
@@ -3288,7 +3334,11 @@ document.getElementById('feat-compute-btn').addEventListener('click', async () =
     await tick();
     FEAT_MATRIX = await computeFeatureMatrix(selectedSet);
     // Save to MongoDB so next time it's instant
-    saveFeatureMatrix([...selectedSet], COUNTRIES, FEAT_MATRIX);
+    document.getElementById('feat-progress-text').textContent = 'Saving matrix cache...';
+    const saved = await saveFeatureMatrix([...selectedSet], COUNTRIES, FEAT_MATRIX);
+    document.getElementById('feat-progress-text').textContent = saved
+      ? 'Saved to cache.'
+      : 'Computed, but cache save failed.';
   }
 
   ACTIVE_MATRIX = FEAT_MATRIX;

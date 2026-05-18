@@ -110,19 +110,19 @@ def subtree_size(node: dict) -> int:
 def cost_del_tree(node: dict) -> int:
     """
     Subtree deletion cost:
-    - 0 if the exact subtree already exists in the destination tree
-    - 1 otherwise (all attributes contribute equally as units)
+    - 1 if the exact subtree already exists in the destination tree
+    - subtree size otherwise
     """
-    return 0 if contained_in_target_tree(node) else 1
+    return 1 if contained_in_target_tree(node) else subtree_size(node)
 
 
 def cost_ins_tree(node: dict) -> int:
     """
     Subtree insertion cost:
-    - 0 if the exact subtree already exists in the source tree
-    - 1 otherwise (all attributes contribute equally as units)
+    - 1 if the exact subtree already exists in the source tree
+    - subtree size otherwise
     """
-    return 0 if contained_in_source_tree(node) else 1
+    return 1 if contained_in_source_tree(node) else subtree_size(node)
 
 
 def _try_numeric(label: str) -> float | None:
