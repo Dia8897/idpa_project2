@@ -74,6 +74,13 @@ const els = {
 };
 
 let similarityMatrixData = null;
+let ATTR_FREQ = {};
+let ATTR_COUNTRY_COUNT = 1;
+
+function attrWeight(label) {
+  const coverage = (ATTR_FREQ[String(label || "")] || 0) / Math.max(ATTR_COUNTRY_COUNT, 1);
+  return Math.max(0.01, coverage);
+}
 
 function matrixColor(v) {
   const value = Math.max(0, Math.min(1, Number(v) || 0));
@@ -306,6 +313,25 @@ async function loadTreeByCountry(countryName, dir = DISPLAY_TREE_DIR) {
   const obj = await res.json();
   obj.tree = sortTree(obj.tree);
   return obj;
+}
+
+async function loadAttributeWeights(countries) {
+  const freq = {};
+  let loaded = 0;
+  await Promise.all((countries || []).map(async (country) => {
+    try {
+      const obj = await loadTreeByCountry(country, TED_TREE_DIR);
+      loaded += 1;
+      (obj.tree.children || []).forEach((child) => {
+        const label = nodeLabel(child);
+        freq[label] = (freq[label] || 0) + 1;
+      });
+    } catch (_) {
+      // Ignore missing ad-hoc tree files; they should not block the UI.
+    }
+  }));
+  ATTR_FREQ = freq;
+  ATTR_COUNTRY_COUNT = Math.max(loaded, 1);
 }
 
 function cloneNode(node) {
@@ -1168,51 +1194,53 @@ function makeTedContext(sourceTree, targetTree) {
     return targetSubtrees.has(serializeNode(node));
   }
 
-  function costDelTree(node) {
-    return containedInTargetTree(node) ? 1 : subtreeSize(node);
+  function costDelTree(node, depth = 0) {
+    const base = containedInTargetTree(node) ? 1 : subtreeSize(node);
+    return base * (depth === 1 ? attrWeight(nodeLabel(node)) : 1);
   }
 
-  function costInsTree(node) {
-    return containedInSourceTree(node) ? 1 : subtreeSize(node);
+  function costInsTree(node, depth = 0) {
+    const base = containedInSourceTree(node) ? 1 : subtreeSize(node);
+    return base * (depth === 1 ? attrWeight(nodeLabel(node)) : 1);
   }
 
-  function costUpdRoot(a, b) {
+  function costUpdRoot(a, b, depth = 0) {
     if (nodeLabel(a) === nodeLabel(b)) return 0;
     if (isLeaf(a) && isLeaf(b)) {
       const gradedNumeric = numericLeafUpdateCost(nodeLabel(a), nodeLabel(b));
       if (gradedNumeric != null) return gradedNumeric;
       return 1;
     }
-    return costDelTree(a) + costInsTree(b);
+    return costDelTree(a, depth) + costInsTree(b, depth);
   }
 
-  function ted(a, b) {
-    const key = `${serializeNode(a)}|${serializeNode(b)}`;
+  function ted(a, b, depth = 0) {
+    const key = `${serializeNode(a)}|${serializeNode(b)}|${depth}`;
     if (tedCache.has(key)) return tedCache.get(key);
 
     let result;
     if (nodeLabel(a) !== nodeLabel(b) && !(isLeaf(a) && isLeaf(b))) {
-      result = costDelTree(a) + costInsTree(b);
+      result = costDelTree(a, depth) + costInsTree(b, depth);
     } else {
       const aChildren = a.children || [];
       const bChildren = b.children || [];
       const m = aChildren.length;
       const n = bChildren.length;
       const dist = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
-      dist[0][0] = costUpdRoot(a, b);
+      dist[0][0] = costUpdRoot(a, b, depth);
 
       for (let i = 1; i <= m; i += 1) {
-        dist[i][0] = dist[i - 1][0] + costDelTree(aChildren[i - 1]);
+        dist[i][0] = dist[i - 1][0] + costDelTree(aChildren[i - 1], depth + 1);
       }
       for (let j = 1; j <= n; j += 1) {
-        dist[0][j] = dist[0][j - 1] + costInsTree(bChildren[j - 1]);
+        dist[0][j] = dist[0][j - 1] + costInsTree(bChildren[j - 1], depth + 1);
       }
       for (let i = 1; i <= m; i += 1) {
         for (let j = 1; j <= n; j += 1) {
           dist[i][j] = Math.min(
-            dist[i - 1][j - 1] + ted(aChildren[i - 1], bChildren[j - 1]),
-            dist[i - 1][j] + costDelTree(aChildren[i - 1]),
-            dist[i][j - 1] + costInsTree(bChildren[j - 1]),
+            dist[i - 1][j - 1] + ted(aChildren[i - 1], bChildren[j - 1], depth + 1),
+            dist[i - 1][j] + costDelTree(aChildren[i - 1], depth + 1),
+            dist[i][j - 1] + costInsTree(bChildren[j - 1], depth + 1),
           );
         }
       }
@@ -1260,7 +1288,7 @@ function sortTree(node) {
   return { ...node, children: merged.map(sortTree) };
 }
 
-function computeTedMetrics(tree1, tree2) {
+function computeTedMetrics(tree1, tree2, selectedFeatureMode = false) {
   tree1 = sortTree(tree1);
   tree2 = sortTree(tree2);
   const { ted } = makeTedContext(tree1, tree2);
@@ -1268,16 +1296,20 @@ function computeTedMetrics(tree1, tree2) {
   const size2 = subtreeSize(tree2);
   const distance = Number(ted(tree1, tree2).toFixed(3));
   const totalNodes = size1 + size2;
-  const normalizedSimilarity = Number((totalNodes ? Math.max(0, 1 - (distance / totalNodes)) : 1).toFixed(3));
+  const denominator = selectedFeatureMode ? totalNodes - distance : totalNodes;
+  const normalizedSimilarity = Number((denominator > 0 ? Math.max(0, 1 - (distance / denominator)) : 1).toFixed(3));
   const commonScore = Number(((totalNodes - distance) / 2).toFixed(3));
 
   return {
     size1,
     size2,
     totalNodes,
+    denominator,
     distance,
     commonScore,
     normalizedSimilarity,
+    weighted: true,
+    selectedFeatureMode,
   };
 }
 
@@ -1634,8 +1666,12 @@ function renderTransform(opsForDisplay, opsForTed = opsForDisplay, tedMetrics = 
 
   if (els.scoreValue) {
     els.scoreValue.textContent = `${(metrics.normalizedSimilarity * 100).toFixed(2)}%`;
-    const weightedText = metrics.weighted ? " Coverage-weighted backend TED." : "";
-    els.scoreExplain.textContent = `Normalized similarity: 1 - TED / (|C| + |D|) = 1 - ${metrics.distance} / (${metrics.size1} + ${metrics.size2}).${weightedText}`;
+    const weightedText = metrics.weighted ? " Coverage-weighted TED." : "";
+    if (metrics.selectedFeatureMode) {
+      els.scoreExplain.textContent = `Normalized similarity: 1 - TED / (|C| + |D| - TED) = 1 - ${metrics.distance} / (${metrics.size1} + ${metrics.size2} - ${metrics.distance}).${weightedText}`;
+    } else {
+      els.scoreExplain.textContent = `Normalized similarity: 1 - TED / (|C| + |D|) = 1 - ${metrics.distance} / (${metrics.size1} + ${metrics.size2}).${weightedText}`;
+    }
   }
 
   const filter = els.opFilter?.value || "ALL";
@@ -1823,7 +1859,7 @@ async function onCompare() {
 
     const opsDisplay = buildEditScript(displaySourceForCompare, displayTargetForCompare); // readable diff
     const opsToken = buildEditScript(tedSourceForCompare, tedTargetForCompare); // tokenized diff for TED
-    let tedMetrics = computeTedMetrics(tedSourceForCompare, tedTargetForCompare);
+    let tedMetrics = computeTedMetrics(tedSourceForCompare, tedTargetForCompare, useSelected);
     if (!useSelected) {
       try {
         tedMetrics = await computeBackendTedMetrics(source, target);
@@ -2039,6 +2075,7 @@ async function init() {
     }
 
     const countries = await loadCountries();
+    await loadAttributeWeights(countries);
     fillSelect(els.countrySelect, countries);
     fillSelect(els.sourceSelect, countries);
     fillSelect(els.targetSelect, countries);

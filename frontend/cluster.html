@@ -978,11 +978,50 @@ async function loadData() {
     data = await resp.json();
   }
 
-  FULL_COUNTRIES = data.countries;
-  FULL_MATRIX    = data.matrix;
-  MATRIX         = FULL_MATRIX;
-  setActiveCountryList(FULL_COUNTRIES);
-  ACTIVE_MATRIX = MATRIX;
+  // FULL_COUNTRIES = data.countries;
+  // FULL_MATRIX    = data.matrix;
+  // MATRIX         = FULL_MATRIX;
+  // setActiveCountryList(FULL_COUNTRIES);
+  // ACTIVE_MATRIX = MATRIX;
+
+  // Prefer country ordering from MongoDB "countries" collection (/api/trees).
+// Then align/reindex the full matrix to that country list.
+let mongoCountries = [];
+try {
+  const treesRes = await fetch(`${DB_API}/api/trees`);
+  if (treesRes.ok) {
+    const docs = await treesRes.json();
+    mongoCountries = (docs || []).map(d => d?.name || d?.country_name).filter(Boolean);
+  }
+} catch (_) {
+  // API unavailable; keep matrix-provided country order
+}
+
+const matrixCountries = data.countries || [];
+const matrixValues = data.matrix || [];
+
+if (mongoCountries.length) {
+  const idxByNorm = new Map(matrixCountries.map((name, i) => [normalizeCountryName(name), i]));
+  const orderedMongo = [...new Set(mongoCountries)];
+
+  // Keep ALL Mongo countries in active list.
+  FULL_COUNTRIES = orderedMongo;
+  FULL_MATRIX = FULL_COUNTRIES.map(a =>
+    FULL_COUNTRIES.map(b => {
+      const i = idxByNorm.get(normalizeCountryName(a));
+      const j = idxByNorm.get(normalizeCountryName(b));
+      if (i != null && j != null) return Number(matrixValues?.[i]?.[j] ?? (i === j ? 1 : 0));
+      return normalizeCountryName(a) === normalizeCountryName(b) ? 1 : 0;
+    })
+  );
+} else {
+  FULL_COUNTRIES = matrixCountries;
+  FULL_MATRIX    = matrixValues;
+}
+
+MATRIX = FULL_MATRIX;
+setActiveCountryList(FULL_COUNTRIES);
+ACTIVE_MATRIX = MATRIX;
 
   // Try loading cached MDS coords from DB — skip recomputing if available
   let mdsFromDB = false;
@@ -2765,7 +2804,10 @@ async function loadAllTrees() {
     const res = await fetch(`${DB_API}/api/trees`);
     if (res.ok) {
       const docs = await res.json();
-      const byName = Object.fromEntries(docs.map(d => [d.name, d]));
+      // const byName = Object.fromEntries(docs.map(d => [d.name, d]));
+      const byName = Object.fromEntries(
+  docs.map(d => [d?.name || d?.country_name, d]).filter(([k]) => Boolean(k))
+);
       TREES_TOK = COUNTRIES.map(name => sortTree(byName[name]?.tokenized_tree?.tree || { label: name, children: [] }));
       TREES_RAW = COUNTRIES.map(name => sortTree(byName[name]?.display_tree?.tree   || { label: name, children: [] }));
       _buildAttrFreq();
@@ -2792,8 +2834,13 @@ async function loadSelectedFeatureTreesFromMongo() {
   if (!res.ok) throw new Error('Could not load country trees from MongoDB.');
 
   const docs = await res.json();
-  const byName = Object.fromEntries(docs.map(d => [d.name, d]));
-  const dbCountries = docs.map(d => d.name).filter(Boolean);
+  // const byName = Object.fromEntries(docs.map(d => [d.name, d]));
+  // const dbCountries = docs.map(d => d.name).filter(Boolean);
+
+  const byName = Object.fromEntries(
+  docs.map(d => [d?.name || d?.country_name, d]).filter(([k]) => Boolean(k))
+);
+const dbCountries = docs.map(d => d?.name || d?.country_name).filter(Boolean);
   const baseCountries = FULL_COUNTRIES.length ? FULL_COUNTRIES : COUNTRIES;
   const baseSet = new Set(baseCountries);
   const extraCountries = dbCountries
