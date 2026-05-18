@@ -243,7 +243,11 @@
                 <span id="feat-spinner" class="spinner-border spinner-border-sm me-1 d-none"></span>
                 <span id="feat-compute-text">Compute Matrix</span>
               </button>
+              <button type="button" class="btn btn-primary btn-sm" id="feat-run-btn" disabled>
+                Run Clustering
+              </button>
             </div>
+            <div id="feat-run-hint" class="text-muted small mt-1">Select features and compute matrix before running clustering.</div>
             <div id="feat-progress" class="mt-2 d-none">
               <div class="progress mb-1" style="height:5px;">
                 <div class="progress-bar bg-success" id="feat-progress-bar" style="width:0%;"></div>
@@ -270,7 +274,6 @@
         <div class="d-flex flex-wrap align-items-center gap-3">
           <span class="fw-semibold small">Evaluation Reference Data</span>
           <select class="form-select form-select-sm" id="ref-data" style="width:220px;">
-            <option value="none">None — internal metrics only</option>
           </select>
           <span class="text-muted small" id="ref-coverage"></span>
         </div>
@@ -465,6 +468,7 @@ let LAST_CLUSTERS    = null;
 let ALL_FEATURES     = [];
 let FEATURE_PRESETS  = [];      // loaded from MongoDB feature_presets collection
 let featuresLoaded   = false;   // true once the attr picker is populated
+let featureMatrixReady = false; // selected-features mode gate: must compute before run
 
 // Feature picker hygiene: hide noisy, non-semantic, or ultra-rare attributes.
 const FEATURE_MIN_COVERAGE = 10;
@@ -524,14 +528,22 @@ function populateRefDropdown() {
   const sel = document.getElementById('ref-data');
   if (!sel) return;
   const current = sel.value;
-  sel.innerHTML = '<option value="none">None — internal metrics only</option>';
+  sel.innerHTML = '';
   Object.entries(GROUND_TRUTH_DATA).forEach(([key, gt]) => {
     const opt = document.createElement('option');
     opt.value = key;
     opt.textContent = gt.label;
     sel.appendChild(opt);
   });
-  sel.value = [...sel.options].some(o => o.value === current) ? current : 'none';
+  if (sel.options.length === 0) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = 'No DB reference datasets found';
+    sel.appendChild(opt);
+    sel.value = '';
+    return;
+  }
+  sel.value = [...sel.options].some(o => o.value === current) ? current : sel.options[0].value;
 }
 
 async function loadReferenceGroups() {
@@ -608,6 +620,9 @@ function renderPresetButtons() {
           hint.textContent = '';
         }
       }
+      // Re-render so preset-selected attributes are pinned to the top.
+      const searchInput = document.getElementById('feat-search');
+      renderAttrOptions(searchInput?.value || '', new Set(preset.features || []));
       updateFeatSummary();
     });
     container.appendChild(btn);
@@ -627,6 +642,8 @@ function renderPresetButtons() {
     if (desc) { desc.textContent = ''; desc.classList.add('d-none'); }
     const hint = document.getElementById('preset-ref-hint');
     if (hint) hint.textContent = '';
+    const searchInput = document.getElementById('feat-search');
+    renderAttrOptions(searchInput?.value || '', new Set());
     updateFeatSummary();
   });
   container.appendChild(clearBtn);
@@ -775,12 +792,6 @@ async function loadData() {
   hacCache             = {};
   fullMdsCoords        = null;
   ATTR_PERCENTILE_VALS = {};
-
-  // Clear any stale feature matrices in MongoDB so they are recomputed with the
-  // current JS TED formula on next use.
-  try {
-    await fetch(`${DB_API}/api/matrix/feature`, { method: 'DELETE' });
-  } catch (_) {}
 
   // Try MongoDB first (served by Flask API); fall back to JSON file
   let data;
@@ -1209,18 +1220,62 @@ function renderScatter(asgn, medoids) {
   const iw = W - mg.left - mg.right, ih = H - mg.top - mg.bottom;
   const { x, y } = mdsCoords;
 
+  // Display-only transform: push cluster centers apart while preserving
+  // local within-cluster geometry so clusters are visually easier to separate.
+  const CLUSTER_SEPARATION = 1.55;
+  const k = Math.max(...asgn) + 1;
+  const centroids = Array.from({ length: k }, () => ({ x: 0, y: 0, n: 0 }));
+  for (let i = 0; i < N; i++) {
+    const c = asgn[i];
+    centroids[c].x += x[i];
+    centroids[c].y += y[i];
+    centroids[c].n += 1;
+  }
+  centroids.forEach(c => {
+    if (c.n > 0) {
+      c.x /= c.n;
+      c.y /= c.n;
+    }
+  });
+
+  const xDisp = new Array(N);
+  const yDisp = new Array(N);
+  for (let i = 0; i < N; i++) {
+    const c = centroids[asgn[i]];
+    const dx = x[i] - c.x;
+    const dy = y[i] - c.y;
+    xDisp[i] = c.x * CLUSTER_SEPARATION + dx;
+    yDisp[i] = c.y * CLUSTER_SEPARATION + dy;
+  }
+
   document.getElementById('viz-area').innerHTML = '';
   const svg = d3.select('#viz-area').append('svg').attr('width', W).attr('height', H);
   const g   = svg.append('g').attr('transform', `translate(${mg.left},${mg.top})`);
 
-  const xs = d3.scaleLinear().domain(d3.extent(x)).range([0, iw]).nice();
-  const ys = d3.scaleLinear().domain(d3.extent(y)).range([ih, 0]).nice();
+  const xs = d3.scaleLinear().domain(d3.extent(xDisp)).range([0, iw]).nice();
+  const ys = d3.scaleLinear().domain(d3.extent(yDisp)).range([ih, 0]).nice();
 
   // Axis labels
   g.append('g').attr('transform', `translate(0,${ih})`).call(d3.axisBottom(xs).ticks(5).tickFormat(() => ''))
     .call(g => g.select('.domain').attr('stroke', '#ccc'));
   g.append('g').call(d3.axisLeft(ys).ticks(5).tickFormat(() => ''))
     .call(g => g.select('.domain').attr('stroke', '#ccc'));
+
+  // Human-readable axis labels
+  g.append('text')
+    .attr('x', iw / 2)
+    .attr('y', ih + 24)
+    .attr('text-anchor', 'middle')
+    .attr('font-size', '11px')
+    .attr('fill', '#666')
+    .text('Dimension 1 (unitless similarity-map axis)');
+
+  g.append('text')
+    .attr('transform', `translate(${-20},${ih / 2}) rotate(-90)`)
+    .attr('text-anchor', 'middle')
+    .attr('font-size', '11px')
+    .attr('fill', '#666')
+    .text('Dimension 2 (unitless similarity-map axis)');
 
   const tooltip = d3.select('body').selectAll('#scat-tip').data([1]).join('div')
     .attr('id','scat-tip')
@@ -1231,7 +1286,7 @@ function renderScatter(asgn, medoids) {
   const isMed = new Set(medoids);
 
   g.selectAll('circle').data(d3.range(N)).join('circle')
-    .attr('cx', i => xs(x[i])).attr('cy', i => ys(y[i]))
+    .attr('cx', i => xs(xDisp[i])).attr('cy', i => ys(yDisp[i]))
     .attr('r',  i => isMed.has(i) ? 9 : 4.5)
     .attr('fill',   i => col(asgn[i]))
     .attr('stroke', i => isMed.has(i) ? '#222' : 'white')
@@ -1241,6 +1296,36 @@ function renderScatter(asgn, medoids) {
       .html(`<strong>${dname(i)}</strong><br>Cluster ${asgn[i]+1}${isMed.has(i) ? ' <em>(medoid)</em>' : ''}`))
     .on('mousemove', ev => tooltip.style('left',(ev.clientX+14)+'px').style('top',(ev.clientY-10)+'px'))
     .on('mouseout',  ()  => tooltip.style('display','none'));
+
+  // Compact in-plot legend (countries vs medoids)
+  const legend = g.append('g').attr('transform', 'translate(8, 8)');
+  legend.append('rect')
+    .attr('x', 0).attr('y', 0).attr('width', 170).attr('height', 52)
+    .attr('rx', 8)
+    .attr('fill', '#ffffff')
+    .attr('stroke', '#d9dee6');
+  legend.append('text')
+    .attr('x', 10).attr('y', 16)
+    .attr('font-size', '11px')
+    .attr('font-weight', '600')
+    .attr('fill', '#333')
+    .text('Legend');
+  legend.append('circle')
+    .attr('cx', 16).attr('cy', 32).attr('r', 4.5)
+    .attr('fill', '#6c757d').attr('stroke', 'white').attr('stroke-width', 0.8);
+  legend.append('text')
+    .attr('x', 28).attr('y', 35)
+    .attr('font-size', '10px')
+    .attr('fill', '#555')
+    .text('Country');
+  legend.append('circle')
+    .attr('cx', 96).attr('cy', 32).attr('r', 8)
+    .attr('fill', '#6c757d').attr('stroke', '#222').attr('stroke-width', 2);
+  legend.append('text')
+    .attr('x', 110).attr('y', 35)
+    .attr('font-size', '10px')
+    .attr('fill', '#555')
+    .text('Medoid');
 }
 
 // ─── Render: dendrogram ───────────────────────────────────────────────────────
@@ -1640,8 +1725,11 @@ async function saveFeatureMatrix(selectedAttrs, countries, matrix) {
 // ─── Main run ─────────────────────────────────────────────────────────────────
 async function run() {
   const btn = document.getElementById('run-btn');
+  const featRunBtn = document.getElementById('feat-run-btn');
   const sp  = document.getElementById('run-spinner');
-  btn.disabled = true; sp.classList.remove('d-none');
+  btn.disabled = true;
+  if (featRunBtn) featRunBtn.disabled = true;
+  sp.classList.remove('d-none');
   await tick();
 
   const algo = document.querySelector('input[name="algo"]:checked').value;
@@ -1654,8 +1742,7 @@ async function run() {
     const res  = kmedoids(k, seed);
     asgn = res.assignments; clusters = res.clusters; medoids = res.medoids;
     extraVal   = res.cost.toFixed(2); extraLabel = 'Total Cost';
-    document.getElementById('viz-title').textContent    = 'MDS Projection';
-    document.getElementById('viz-subtitle').textContent = 'Each dot = one country. Medoids are larger with dark border.';
+    document.getElementById('viz-title').textContent    = 'Country Cluster Map (2D)';
     renderScatter(asgn, medoids);
   } else {
     const linkage  = document.getElementById('hac-linkage').value;
@@ -1698,7 +1785,7 @@ async function run() {
   // ── External metrics ────────────────────────────────────────────────────────
   const refKey = document.getElementById('ref-data').value;
   const extRow = document.getElementById('ext-stats-row');
-  if (refKey !== 'none') {
+  if (refKey && GROUND_TRUTH_DATA[refKey]) {
     const refLabels = getRefLabels(refKey);
     const ext = computeExternalMetrics(asgn, refLabels);
     if (ext) {
@@ -1723,7 +1810,7 @@ async function run() {
   const toggleBtn = document.getElementById('show-true-clusters-btn');
   const legendRef = document.getElementById('legend-ref-label');
   const refKeyNow = document.getElementById('ref-data').value;
-  if (refKeyNow !== 'none' && statusResult) {
+  if (refKeyNow && GROUND_TRUTH_DATA[refKeyNow] && statusResult) {
     legend.classList.remove('d-none');
     toggleBtn.classList.remove('d-none');
     legendRef.textContent = `Reference: ${GROUND_TRUTH_DATA[refKeyNow]?.label || refKeyNow} — Cluster majority = most common reference group in that cluster`;
@@ -1734,10 +1821,11 @@ async function run() {
 
   // Save run to MongoDB (fire-and-forget — does not block the UI)
   const refKey2  = document.getElementById('ref-data').value;
-  const extFinal = refKey2 !== 'none' ? computeExternalMetrics(asgn, getRefLabels(refKey2)) : null;
+  const extFinal = (refKey2 && GROUND_TRUTH_DATA[refKey2]) ? computeExternalMetrics(asgn, getRefLabels(refKey2)) : null;
   saveClusteringRun(algo, asgn, { silhouette: sil, davies_bouldin: db }, extFinal);
 
-  btn.disabled = false; sp.classList.add('d-none');
+  sp.classList.add('d-none');
+  updateRunButtonState();
 }
 
 // ─── Elbow analysis ──────────────────────────────────────────────────────────
@@ -1754,7 +1842,7 @@ async function runElbow() {
 
   const hacRes    = computeHAC('average');
   const refKey    = document.getElementById('ref-data').value;
-  const refLabels = refKey !== 'none' ? getRefLabels(refKey) : null;
+  const refLabels = (refKey && GROUND_TRUTH_DATA[refKey]) ? getRefLabels(refKey) : null;
 
   for (const k of ks) {
     const km  = kmedoids(k, 42);
@@ -2037,7 +2125,7 @@ function computeExternalMetrics(assignments, refLabels) {
 // ─── Per-country TP/FP/FN status ─────────────────────────────────────────────
 function computePerCountryStatus(asgn, clusters) {
   const refKey = document.getElementById('ref-data').value;
-  if (refKey === 'none') return null;
+  if (!refKey || !GROUND_TRUTH_DATA[refKey]) return null;
 
   const refLabels = getRefLabels(refKey);
   if (!refLabels) return null;
@@ -2381,6 +2469,9 @@ function renderAttrOptions(query = '', forcedSelected = null) {
 function updateFeatSummary() {
   const checked = [...document.querySelectorAll('.feat-attr-cb:checked')];
   document.getElementById('feat-compute-btn').disabled = checked.length === 0;
+  // Attribute selection changed: selected-feature matrix is now stale.
+  featureMatrixReady = false;
+  updateRunButtonState();
   if (!checked.length) {
     document.getElementById('feat-summary').textContent = 'Select at least one attribute.';
     return;
@@ -2392,6 +2483,37 @@ function updateFeatSummary() {
     document.getElementById('feat-summary').textContent = `${label} — ${cov}/${N} countries have data`;
   } else {
     document.getElementById('feat-summary').textContent = label;
+  }
+}
+
+function updateRunButtonState() {
+  const mode = document.querySelector('input[name="feat-mode"]:checked')?.value || 'all';
+  const globalRun = document.getElementById('run-btn');
+  const featRun   = document.getElementById('feat-run-btn');
+  const hint      = document.getElementById('feat-run-hint');
+
+  if (mode === 'selected') {
+    const allowed = featureMatrixReady;
+    if (globalRun) globalRun.disabled = !allowed;
+    if (featRun) {
+      featRun.disabled = !allowed;
+      featRun.classList.toggle('d-none', false);
+    }
+    if (hint) {
+      hint.textContent = allowed
+        ? 'Matrix ready. You can now run clustering.'
+        : 'Please click Compute Matrix first, then run clustering.';
+      hint.classList.toggle('text-success', allowed);
+      hint.classList.toggle('text-muted', !allowed);
+    }
+  } else {
+    if (globalRun) globalRun.disabled = false;
+    if (featRun) featRun.classList.add('d-none');
+    if (hint) {
+      hint.textContent = 'Select features and compute matrix before running clustering.';
+      hint.classList.remove('text-success');
+      hint.classList.add('text-muted');
+    }
   }
 }
 
@@ -2479,8 +2601,10 @@ document.querySelectorAll('input[name="feat-mode"]').forEach(r =>
   r.addEventListener('change', async function () {
     document.getElementById('feat-picker').classList.toggle('d-none', this.value !== 'selected');
     if (this.value === 'selected') {
+      featureMatrixReady = false;
       await ensureFeaturesLoaded();  // fast: just label+count from DB
       if (!FEATURE_PRESETS.length) await loadFeaturePresets();
+      updateRunButtonState();
     } else {
       if (ACTIVE_MATRIX !== MATRIX) {
         ACTIVE_MATRIX = MATRIX;
@@ -2493,6 +2617,7 @@ document.querySelectorAll('input[name="feat-mode"]').forEach(r =>
         initCutSlider(currentLinkage);
         run();
       }
+      updateRunButtonState();
     }
   })
 );
@@ -2560,6 +2685,8 @@ document.getElementById('feat-compute-btn').addEventListener('click', async () =
   ACTIVE_MATRIX = FEAT_MATRIX;
   ACTIVE_ATTRS  = selectedSet;
   hacCache      = {};
+  featureMatrixReady = true;
+  updateRunButtonState();
 
   document.getElementById('feat-progress-text').textContent = 'Computing MDS…';
   await tick();
@@ -2577,6 +2704,8 @@ document.getElementById('feat-compute-btn').addEventListener('click', async () =
   run();
 });
 
+bindIfExists('feat-run-btn', 'click', run);
+
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 // Sync control visibility with whichever algo radio is checked on load
 (function initAlgoUI() {
@@ -2589,6 +2718,7 @@ document.getElementById('feat-compute-btn').addEventListener('click', async () =
 })();
 
 loadData().catch(showClusterBootError);
+updateRunButtonState();
 </script>
 </body>
 </html>
