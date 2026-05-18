@@ -24,6 +24,27 @@
       display: flex; align-items: center; justify-content: center; z-index: 1000;
     }
     #viz-area svg { display: block; }
+    .viz-toolbar {
+      display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+      padding: 6px 8px; border-bottom: 1px solid #e9ecef; background: #fff;
+    }
+    .viz-toolbar .btn { line-height: 1; }
+    .viz-zoom-readout { min-width: 54px; font-size: 11px; color: #6c757d; }
+    .cluster-overview {
+      display: flex; flex-wrap: wrap; gap: 5px;
+      padding: 6px 8px; border-bottom: 1px solid #eef1f4; background: #fbfcfd;
+    }
+    .cluster-pill {
+      border: 1px solid currentColor; background: white; border-radius: 999px;
+      padding: 2px 8px; font-size: 11px; cursor: pointer;
+    }
+    .cluster-pill:hover { background: #f8f9fa; }
+    .card:fullscreen {
+      background: #fff; overflow: auto; padding: 0;
+    }
+    .card:fullscreen #viz-area svg {
+      width: 100%; height: calc(100vh - 140px);
+    }
     .algo-badge { font-size: .7rem; padding: 2px 8px; border-radius: 10px; }
     .matrix-overlay {
       position: fixed; inset: 0; background: rgba(0,0,0,.55);
@@ -53,13 +74,145 @@
       max-width: 360px;
       font-size: 0.88rem;
     }
+    .feat-picker-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
     .feat-list {
-      max-height: 220px;
+      max-height: 320px;
       overflow-y: auto;
       border: 1px solid #dee2e6;
       border-radius: 8px;
       background: #fff;
       padding: 8px;
+    }
+    #feat-picker:fullscreen {
+      background: #fff;
+      padding: 18px;
+      overflow: auto;
+    }
+    #feat-picker:fullscreen .feat-list {
+      max-height: calc(100vh - 190px);
+    }
+    .selected-feature-panel {
+      border: 1px solid #cfe0ff;
+      border-radius: 8px;
+      background: #f8fbff;
+      padding: 8px;
+      margin-bottom: 8px;
+    }
+    .selected-feature-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 7px;
+      font-size: 0.82rem;
+    }
+    .selected-feature-head strong {
+      color: #0d6efd;
+    }
+    .selected-feature-head button {
+      margin-left: auto;
+      border: 1px solid #ced4da;
+      background: #fff;
+      color: #495057;
+      border-radius: 5px;
+      padding: 2px 8px;
+      font-size: 0.72rem;
+    }
+    .selected-feature-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+    }
+    .selected-feature-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      max-width: 220px;
+      border: 1px solid #b9d3ff;
+      border-radius: 999px;
+      background: #fff;
+      color: #0b5ed7;
+      padding: 3px 8px;
+      font-size: 0.76rem;
+      line-height: 1.2;
+      cursor: pointer;
+    }
+    .selected-feature-chip:hover {
+      background: #eef5ff;
+    }
+    .selected-feature-chip .chip-label {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .selected-feature-chip .chip-remove {
+      color: #6c757d;
+      font-weight: 700;
+    }
+    .feat-group {
+      border: 1px solid #e7ebf0;
+      border-radius: 8px;
+      margin-bottom: 8px;
+      background: #fff;
+      overflow: hidden;
+    }
+    .feat-group[open] {
+      border-color: #cfe0ff;
+    }
+    .feat-group-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 8px 10px;
+      background: #f8fafc;
+      border-bottom: 1px solid #e7ebf0;
+      cursor: pointer;
+      list-style: none;
+    }
+    .feat-group-head::-webkit-details-marker { display: none; }
+    .feat-group-title {
+      font-size: 0.82rem;
+      font-weight: 700;
+      color: #212529;
+    }
+    .feat-group-title::before {
+      content: "▸";
+      display: inline-block;
+      width: 14px;
+      color: #6c757d;
+    }
+    .feat-group[open] .feat-group-title::before {
+      content: "▾";
+    }
+    .feat-group-desc {
+      display: block;
+      font-size: 0.72rem;
+      font-weight: 400;
+      color: #6c757d;
+      margin-top: 1px;
+    }
+    .feat-group-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+    .feat-group-actions button {
+      border: 1px solid #ced4da;
+      background: #fff;
+      color: #495057;
+      border-radius: 5px;
+      padding: 2px 7px;
+      font-size: 0.7rem;
+    }
+    .feat-group-body {
+      padding: 6px;
     }
     .feat-item {
       display: flex;
@@ -88,6 +241,12 @@
       overflow: hidden;
       text-overflow: ellipsis;
       max-width: 100%;
+    }
+    .feat-meta {
+      display: block;
+      font-size: 0.72rem;
+      color: #6c757d;
+      margin-top: 1px;
     }
     .feat-count {
       font-size: 0.75rem;
@@ -226,13 +385,17 @@
             <div id="preset-btns" class="mb-2 d-none"></div>
             <div id="preset-description" class="text-muted small mb-2 d-none"></div>
             <div id="preset-ref-hint" class="small mt-1" style="color:#E65100;"></div>
-            <div class="mb-2">
+            <div class="feat-picker-toolbar">
               <input
                 type="text"
                 id="feat-search"
                 class="form-control form-control-sm feat-search-input"
                 placeholder="Search features (e.g., population, area, language)..."
               />
+              <button type="button" class="btn btn-outline-secondary btn-sm" id="feat-expand-all">Expand All</button>
+              <button type="button" class="btn btn-outline-secondary btn-sm" id="feat-collapse-all">Collapse All</button>
+              <button type="button" class="btn btn-outline-primary btn-sm" id="feat-selected-only">Selected Only</button>
+              <button type="button" class="btn btn-outline-primary btn-sm" id="feat-fullscreen">Full Screen</button>
             </div>
             <div id="feat-checks" class="feat-list mb-2"></div>
             <div class="d-flex flex-wrap align-items-center gap-2">
@@ -469,8 +632,12 @@ let ALL_FEATURES     = [];
 let FEATURE_PRESETS  = [];      // loaded from MongoDB feature_presets collection
 let featuresLoaded   = false;   // true once the attr picker is populated
 let featureMatrixReady = false; // selected-features mode gate: must compute before run
+let SELECTED_FEATURES = new Set();
+let SHOW_SELECTED_FEATURES_ONLY = false;
+let EXPANDED_FEATURE_GROUPS = new Set();
 
-// Feature picker hygiene: hide noisy, non-semantic, or ultra-rare attributes.
+// Feature picker hygiene: keep every nonempty feature, but route noisy or
+// ultra-rare attributes into "Other Useful Fields" instead of hiding them.
 const FEATURE_MIN_COVERAGE = 10;
 const FEATURE_EXCLUDE_REGEX = [
   /^president_of_/,
@@ -490,13 +657,13 @@ const FEATURE_EXCLUDE_REGEX = [
 
 function isFeatureAllowed(label, count) {
   const raw = String(label || '').trim();
-  if (!raw) return false;
-  if (Number(count || 0) < FEATURE_MIN_COVERAGE) return false;
-  return !FEATURE_EXCLUDE_REGEX.some((rx) => rx.test(raw));
+  return Boolean(raw);
 }
 
 function filterFeaturesForPicker(features) {
-  return (features || []).filter(f => isFeatureAllowed(f.label, f.count));
+  return (features || [])
+    .filter(f => isFeatureAllowed(f.label, f.count))
+    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
 }
 let treesLoaded      = false;   // true once full tree data is loaded
 let ATTR_FREQ        = {};      // label → count across all tokenized trees
@@ -528,22 +695,14 @@ function populateRefDropdown() {
   const sel = document.getElementById('ref-data');
   if (!sel) return;
   const current = sel.value;
-  sel.innerHTML = '';
+  sel.innerHTML = '<option value="">None — internal metrics only</option>';
   Object.entries(GROUND_TRUTH_DATA).forEach(([key, gt]) => {
     const opt = document.createElement('option');
     opt.value = key;
     opt.textContent = gt.label;
     sel.appendChild(opt);
   });
-  if (sel.options.length === 0) {
-    const opt = document.createElement('option');
-    opt.value = '';
-    opt.textContent = 'No DB reference datasets found';
-    sel.appendChild(opt);
-    sel.value = '';
-    return;
-  }
-  sel.value = [...sel.options].some(o => o.value === current) ? current : sel.options[0].value;
+  sel.value = [...sel.options].some(o => o.value === current) ? current : '';
 }
 
 async function loadReferenceGroups() {
@@ -595,13 +754,8 @@ function renderPresetButtons() {
     btn.dataset.presetId = preset._id;
     btn.textContent = preset.label;
     btn.addEventListener('click', () => {
-      // Uncheck all
-      document.querySelectorAll('.feat-attr-cb').forEach(cb => { cb.checked = false; });
-      // Check only this preset's features
-      preset.features.forEach(label => {
-        const el = document.getElementById(`attr-${label}`);
-        if (el) el.checked = true;
-      });
+      SELECTED_FEATURES = new Set(preset.features || []);
+      EXPANDED_FEATURE_GROUPS = featureGroupIdsForLabels(SELECTED_FEATURES);
       // Highlight active preset button
       container.querySelectorAll('.btn[data-preset-id]').forEach(b => {
         b.className = b.dataset.presetId === preset._id
@@ -622,7 +776,8 @@ function renderPresetButtons() {
       }
       // Re-render so preset-selected attributes are pinned to the top.
       const searchInput = document.getElementById('feat-search');
-      renderAttrOptions(searchInput?.value || '', new Set(preset.features || []));
+      renderAttrOptions(searchInput?.value || '');
+      scrollFeatureGroupIntoView([...EXPANDED_FEATURE_GROUPS][0]);
       updateFeatSummary();
     });
     container.appendChild(btn);
@@ -634,7 +789,8 @@ function renderPresetButtons() {
   clearBtn.className = 'btn btn-sm btn-outline-danger me-1';
   clearBtn.textContent = 'Clear preset';
   clearBtn.addEventListener('click', () => {
-    document.querySelectorAll('.feat-attr-cb').forEach(cb => { cb.checked = false; });
+    SELECTED_FEATURES = new Set();
+    EXPANDED_FEATURE_GROUPS = new Set();
     container.querySelectorAll('.btn[data-preset-id]').forEach(b => {
       b.className = 'btn btn-sm btn-outline-secondary me-1';
     });
@@ -643,7 +799,7 @@ function renderPresetButtons() {
     const hint = document.getElementById('preset-ref-hint');
     if (hint) hint.textContent = '';
     const searchInput = document.getElementById('feat-search');
-    renderAttrOptions(searchInput?.value || '', new Set());
+    renderAttrOptions(searchInput?.value || '');
     updateFeatSummary();
   });
   container.appendChild(clearBtn);
@@ -1216,7 +1372,7 @@ function classicalMDS() {
 // ─── Render: MDS scatter plot ─────────────────────────────────────────────────
 function renderScatter(asgn, medoids) {
   const W = document.getElementById('viz-area').clientWidth || 680;
-  const H = 540, mg = {top:15, right:15, bottom:30, left:30};
+  const H = 575, mg = {top:15, right:15, bottom:30, left:30};
   const iw = W - mg.left - mg.right, ih = H - mg.top - mg.bottom;
   const { x, y } = mdsCoords;
 
@@ -1248,18 +1404,45 @@ function renderScatter(asgn, medoids) {
     yDisp[i] = c.y * CLUSTER_SEPARATION + dy;
   }
 
-  document.getElementById('viz-area').innerHTML = '';
-  const svg = d3.select('#viz-area').append('svg').attr('width', W).attr('height', H);
+  document.getElementById('viz-area').innerHTML = `
+    <div class="viz-toolbar">
+      <button type="button" class="btn btn-outline-secondary btn-sm" id="scatter-zoom-in">Zoom In</button>
+      <button type="button" class="btn btn-outline-secondary btn-sm" id="scatter-zoom-out">Zoom Out</button>
+      <button type="button" class="btn btn-outline-secondary btn-sm" id="scatter-zoom-reset">Reset</button>
+      <button type="button" class="btn btn-outline-primary btn-sm" id="scatter-fullscreen">Full Screen</button>
+      <button type="button" class="btn btn-outline-secondary btn-sm active" id="scatter-toggle-hulls">Cluster Areas</button>
+      <button type="button" class="btn btn-outline-secondary btn-sm active" id="scatter-toggle-medoids">Medoids</button>
+      <button type="button" class="btn btn-outline-secondary btn-sm" id="scatter-toggle-labels">Labels</button>
+      <span class="viz-zoom-readout" id="scatter-zoom-readout">100%</span>
+      <span class="text-muted small ms-1">Scroll to zoom, drag to pan. Labels appear as you zoom in.</span>
+    </div>
+    <div class="cluster-overview" id="scatter-cluster-overview"></div>
+  `;
+  const svg = d3.select('#viz-area').append('svg')
+    .attr('width', '100%')
+    .attr('height', H)
+    .attr('viewBox', `0 0 ${W} ${H}`)
+    .attr('preserveAspectRatio', 'xMidYMid meet');
   const g   = svg.append('g').attr('transform', `translate(${mg.left},${mg.top})`);
 
   const xs = d3.scaleLinear().domain(d3.extent(xDisp)).range([0, iw]).nice();
   const ys = d3.scaleLinear().domain(d3.extent(yDisp)).range([ih, 0]).nice();
+  const xAxis = g.append('g').attr('transform', `translate(0,${ih})`);
+  const yAxis = g.append('g');
+  const clipId = `scatter-clip-${Date.now()}`;
+  svg.append('defs').append('clipPath').attr('id', clipId)
+    .append('rect').attr('x', mg.left).attr('y', mg.top).attr('width', iw).attr('height', ih);
+  const plot = g.append('g').attr('clip-path', `url(#${clipId})`);
+  const hullLayer = plot.append('g');
+  const pointLayer = plot.append('g');
+  const medoidLayer = plot.append('g');
+  const labelLayer = plot.append('g');
 
   // Axis labels
-  g.append('g').attr('transform', `translate(0,${ih})`).call(d3.axisBottom(xs).ticks(5).tickFormat(() => ''))
-    .call(g => g.select('.domain').attr('stroke', '#ccc'));
-  g.append('g').call(d3.axisLeft(ys).ticks(5).tickFormat(() => ''))
-    .call(g => g.select('.domain').attr('stroke', '#ccc'));
+  xAxis.call(d3.axisBottom(xs).ticks(5).tickFormat(() => ''))
+    .call(axis => axis.select('.domain').attr('stroke', '#ccc'));
+  yAxis.call(d3.axisLeft(ys).ticks(5).tickFormat(() => ''))
+    .call(axis => axis.select('.domain').attr('stroke', '#ccc'));
 
   // Human-readable axis labels
   g.append('text')
@@ -1284,8 +1467,83 @@ function renderScatter(asgn, medoids) {
     .style('pointer-events','none').style('display','none').style('z-index','999').style('box-shadow','0 2px 8px rgba(0,0,0,.15)');
 
   const isMed = new Set(medoids);
+  const clusterSizes = d3.rollup(d3.range(N), v => v.length, i => asgn[i]);
+  const medoidByCluster = new Map((medoids || []).map((idx, ci) => [ci, idx]));
+  let showHulls = true;
+  let showMedoids = true;
+  let forceLabels = false;
 
-  g.selectAll('circle').data(d3.range(N)).join('circle')
+  const clusterOverview = document.getElementById('scatter-cluster-overview');
+  if (clusterOverview) {
+    clusterOverview.innerHTML = d3.range(k).map(ci => {
+      const med = medoidByCluster.get(ci);
+      return `
+        <button type="button" class="cluster-pill" data-cluster="${ci}" style="color:${col(ci)}">
+          Cluster ${ci + 1}: ${clusterSizes.get(ci) || 0}
+          ${med != null ? ` · medoid ${dname(med)}` : ''}
+        </button>`;
+    }).join('');
+  }
+
+  function pointTooltip(i) {
+    const ci = asgn[i];
+    const medoid = medoidByCluster.get(ci);
+    const sim = medoid != null ? Number(ACTIVE_MATRIX?.[i]?.[medoid]) : null;
+    const distance = Number.isFinite(sim) ? (1 - sim).toFixed(3) : 'n/a';
+    const simText = Number.isFinite(sim) ? sim.toFixed(3) : 'n/a';
+    const role = isMed.has(i) ? 'medoid' : 'country';
+    return `
+      <strong>${dname(i)}</strong><br>
+      Cluster ${ci + 1} · ${clusterSizes.get(ci) || 0} countries<br>
+      Role: ${role}<br>
+      Medoid: ${medoid != null ? dname(medoid) : 'n/a'}<br>
+      Similarity to medoid: ${simText}<br>
+      Distance to medoid: ${distance}
+    `;
+  }
+
+  function hullPathForCluster(ci, zx = xs, zy = ys) {
+    const pts = d3.range(N)
+      .filter(i => asgn[i] === ci)
+      .map(i => [zx(xDisp[i]), zy(yDisp[i])]);
+    if (pts.length < 3) return '';
+    const hull = d3.polygonHull(pts);
+    return hull ? `M${hull.map(p => p.join(',')).join('L')}Z` : '';
+  }
+
+  const hulls = hullLayer.selectAll('path').data(d3.range(k)).join('path')
+    .attr('d', ci => hullPathForCluster(ci))
+    .attr('fill', ci => col(ci))
+    .attr('fill-opacity', 0.09)
+    .attr('stroke', ci => col(ci))
+    .attr('stroke-opacity', 0.5)
+    .attr('stroke-width', 1.2)
+    .attr('stroke-linejoin', 'round')
+    .attr('pointer-events', 'none');
+
+  const medoidHalos = medoidLayer.selectAll('circle').data(medoids || []).join('circle')
+    .attr('cx', i => xs(xDisp[i]))
+    .attr('cy', i => ys(yDisp[i]))
+    .attr('r', 15)
+    .attr('fill', 'none')
+    .attr('stroke', i => col(asgn[i]))
+    .attr('stroke-width', 2.2)
+    .attr('stroke-dasharray', '4,3')
+    .attr('pointer-events', 'none');
+
+  const medoidLabels = medoidLayer.selectAll('text').data(medoids || []).join('text')
+    .attr('x', i => xs(xDisp[i]) + 12)
+    .attr('y', i => ys(yDisp[i]) - 12)
+    .attr('font-size', '10px')
+    .attr('font-weight', 700)
+    .attr('fill', i => col(asgn[i]))
+    .attr('paint-order', 'stroke')
+    .attr('stroke', 'white')
+    .attr('stroke-width', 3)
+    .attr('pointer-events', 'none')
+    .text(i => `medoid: ${dname(i)}`);
+
+  const circles = pointLayer.selectAll('circle').data(d3.range(N)).join('circle')
     .attr('cx', i => xs(xDisp[i])).attr('cy', i => ys(yDisp[i]))
     .attr('r',  i => isMed.has(i) ? 9 : 4.5)
     .attr('fill',   i => col(asgn[i]))
@@ -1293,9 +1551,112 @@ function renderScatter(asgn, medoids) {
     .attr('stroke-width', i => isMed.has(i) ? 2 : 0.8)
     .attr('opacity', 0.88)
     .on('mouseover', (ev, i) => tooltip.style('display','block')
-      .html(`<strong>${dname(i)}</strong><br>Cluster ${asgn[i]+1}${isMed.has(i) ? ' <em>(medoid)</em>' : ''}`))
+      .html(pointTooltip(i)))
     .on('mousemove', ev => tooltip.style('left',(ev.clientX+14)+'px').style('top',(ev.clientY-10)+'px'))
     .on('mouseout',  ()  => tooltip.style('display','none'));
+
+  const labels = labelLayer.selectAll('text').data(d3.range(N)).join('text')
+    .attr('x', i => xs(xDisp[i]) + 7)
+    .attr('y', i => ys(yDisp[i]) + 3)
+    .attr('font-size', '10px')
+    .attr('font-weight', i => isMed.has(i) ? 700 : 500)
+    .attr('fill', i => col(asgn[i]))
+    .attr('paint-order', 'stroke')
+    .attr('stroke', 'white')
+    .attr('stroke-width', 3)
+    .attr('pointer-events', 'none')
+    .style('display', 'none')
+    .text(i => dname(i));
+
+  const zoomSurface = plot.insert('rect', ':first-child')
+    .attr('x', 0).attr('y', 0).attr('width', iw).attr('height', ih)
+    .attr('fill', 'transparent')
+    .style('cursor', 'grab');
+
+  function redrawZoom(ev) {
+    const t = ev.transform;
+    const zx = t.rescaleX(xs);
+    const zy = t.rescaleY(ys);
+    xAxis.call(d3.axisBottom(zx).ticks(5).tickFormat(() => ''))
+      .call(axis => axis.select('.domain').attr('stroke', '#ccc'));
+    yAxis.call(d3.axisLeft(zy).ticks(5).tickFormat(() => ''))
+      .call(axis => axis.select('.domain').attr('stroke', '#ccc'));
+    circles
+      .attr('cx', i => zx(xDisp[i]))
+      .attr('cy', i => zy(yDisp[i]))
+      .attr('r', i => (isMed.has(i) ? 9 : 4.5) / Math.sqrt(Math.max(1, t.k * 0.35)));
+    hulls
+      .attr('d', ci => hullPathForCluster(ci, zx, zy))
+      .style('display', showHulls ? null : 'none');
+    medoidHalos
+      .attr('cx', i => zx(xDisp[i]))
+      .attr('cy', i => zy(yDisp[i]))
+      .attr('r', 15 / Math.sqrt(Math.max(1, t.k * 0.25)))
+      .style('display', showMedoids ? null : 'none');
+    medoidLabels
+      .attr('x', i => zx(xDisp[i]) + 12)
+      .attr('y', i => zy(yDisp[i]) - 12)
+      .style('display', showMedoids ? null : 'none');
+    labels
+      .attr('x', i => zx(xDisp[i]) + 8)
+      .attr('y', i => zy(yDisp[i]) + 3)
+      .style('display', forceLabels || t.k >= 2.2 ? null : 'none');
+    const readout = document.getElementById('scatter-zoom-readout');
+    if (readout) readout.textContent = `${Math.round(t.k * 100)}%`;
+  }
+
+  const zoom = d3.zoom()
+    .scaleExtent([0.8, 18])
+    .translateExtent([[-iw, -ih], [iw * 2, ih * 2]])
+    .extent([[0, 0], [iw, ih]])
+    .on('zoom', redrawZoom);
+  svg.call(zoom);
+  zoomSurface.on('mousedown', () => zoomSurface.style('cursor', 'grabbing'))
+    .on('mouseup mouseleave', () => zoomSurface.style('cursor', 'grab'));
+  document.getElementById('scatter-zoom-in')?.addEventListener('click', () => svg.transition().duration(160).call(zoom.scaleBy, 1.6));
+  document.getElementById('scatter-zoom-out')?.addEventListener('click', () => svg.transition().duration(160).call(zoom.scaleBy, 0.625));
+  document.getElementById('scatter-zoom-reset')?.addEventListener('click', () => svg.transition().duration(180).call(zoom.transform, d3.zoomIdentity));
+  document.getElementById('scatter-fullscreen')?.addEventListener('click', () => {
+    const card = document.getElementById('viz-area')?.closest('.card');
+    if (!document.fullscreenElement) card?.requestFullscreen?.();
+    else document.exitFullscreen?.();
+  });
+  document.getElementById('scatter-toggle-hulls')?.addEventListener('click', (ev) => {
+    showHulls = !showHulls;
+    ev.currentTarget.classList.toggle('active', showHulls);
+    hulls.style('display', showHulls ? null : 'none');
+  });
+  document.getElementById('scatter-toggle-medoids')?.addEventListener('click', (ev) => {
+    showMedoids = !showMedoids;
+    ev.currentTarget.classList.toggle('active', showMedoids);
+    medoidHalos.style('display', showMedoids ? null : 'none');
+    medoidLabels.style('display', showMedoids ? null : 'none');
+  });
+  document.getElementById('scatter-toggle-labels')?.addEventListener('click', (ev) => {
+    forceLabels = !forceLabels;
+    ev.currentTarget.classList.toggle('active', forceLabels);
+    labels.style('display', forceLabels ? null : 'none');
+  });
+  document.querySelectorAll('#scatter-cluster-overview .cluster-pill').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const ci = Number(btn.dataset.cluster);
+      const members = d3.range(N).filter(i => asgn[i] === ci);
+      if (!members.length) return;
+      const minX = d3.min(members, i => xs(xDisp[i]));
+      const maxX = d3.max(members, i => xs(xDisp[i]));
+      const minY = d3.min(members, i => ys(yDisp[i]));
+      const maxY = d3.max(members, i => ys(yDisp[i]));
+      const boxW = Math.max(24, maxX - minX);
+      const boxH = Math.max(24, maxY - minY);
+      const scale = Math.min(10, Math.max(1.4, 0.74 / Math.max(boxW / iw, boxH / ih)));
+      const cx = (minX + maxX) / 2;
+      const cy = (minY + maxY) / 2;
+      const transform = d3.zoomIdentity
+        .translate(iw / 2 - scale * cx, ih / 2 - scale * cy)
+        .scale(scale);
+      svg.transition().duration(260).call(zoom.transform, transform);
+    });
+  });
 
   // Compact in-plot legend (countries vs medoids)
   const legend = g.append('g').attr('transform', 'translate(8, 8)');
@@ -2422,18 +2783,156 @@ function buildAttrPicker() {
   });
 }
 
+const FEATURE_GROUPS = [
+  {
+    id: 'economy',
+    title: 'Economy & Income',
+    desc: 'GDP, income, inequality, and money-related indicators.',
+    match: /gdp|ppp|nominal|capita|gini|income|currency|debt|exports?|imports?|econom|budget|revenue|trillion|billion/,
+  },
+  {
+    id: 'development',
+    title: 'Development & Quality of Life',
+    desc: 'Human development, health, education, and welfare indicators.',
+    match: /hdi|life|literacy|education|school|health|fertility|mortality|unemployment|poverty/,
+  },
+  {
+    id: 'population',
+    title: 'Population & Demographics',
+    desc: 'Population, density, ethnic groups, religion, and census fields.',
+    match: /population|estimate|census|density|ethnic|religion|demonym|age|birth|urban|rural/,
+  },
+  {
+    id: 'geography',
+    title: 'Geography & Territory',
+    desc: 'Area, land, water, capital city, borders, and location fields.',
+    match: /area|land|water|capital|largest_city|city|border|coast|region|territory|coordinates|location|island/,
+  },
+  {
+    id: 'government',
+    title: 'Government & Institutions',
+    desc: 'Political system, legislature, houses, courts, and public institutions.',
+    match: /government|legislature|house|senate|assembly|court|justice|minister|parliament|president|monarch|king|queen|federal|republic/,
+  },
+  {
+    id: 'language',
+    title: 'Language & Culture',
+    desc: 'Official languages, national languages, scripts, and cultural fields.',
+    match: /language|languages|script|culture|official_language|regional_language|national_language/,
+  },
+  {
+    id: 'time',
+    title: 'Time & Standards',
+    desc: 'Time zones, DST, date formats, codes, and technical identifiers.',
+    match: /time|summer_dst|utc|date|format|code|iso|tld|calling|driving/,
+  },
+  {
+    id: 'other',
+    title: 'Other Useful Fields',
+    desc: 'Less common, noisy, historical, or uncategorized fields.',
+    match: /.*/,
+  },
+];
+
+const FEATURE_HINTS = [
+  [/gdp_ppp/, 'Purchasing-power GDP estimate label/value.'],
+  [/gdp_nominal/, 'Nominal GDP estimate label/value.'],
+  [/per_capita/, 'Per-person economic output.'],
+  [/gini/, 'Income inequality score.'],
+  [/hdi/, 'Human Development Index value.'],
+  [/government/, 'Country government/system description.'],
+  [/legislature/, 'Legislative body name.'],
+  [/official_languages?/, 'Official language tokens.'],
+  [/regional_languages?/, 'Regional or recognized language tokens.'],
+  [/religion/, 'Religious composition tokens.'],
+  [/ethnic/, 'Ethnic group composition tokens.'],
+  [/density/, 'Population density values.'],
+  [/water/, 'Water-area percentage/value.'],
+  [/area|land|total/, 'Area, land, or total-measure values.'],
+  [/capital|largest_city/, 'Capital or largest-city values.'],
+  [/estimate|census|population/, 'Population estimate or census values.'],
+  [/summer_dst|time/, 'Time zone or daylight-saving tokens.'],
+];
+
+function isOtherFeature(feature) {
+  const label = String(feature?.label ?? feature ?? '').toLowerCase();
+  const count = Number(feature?.count ?? FEATURE_MIN_COVERAGE);
+  return count < FEATURE_MIN_COVERAGE || FEATURE_EXCLUDE_REGEX.some(rx => rx.test(label));
+}
+
+function getFeatureGroup(feature) {
+  if (isOtherFeature(feature)) return FEATURE_GROUPS[FEATURE_GROUPS.length - 1];
+  const clean = String(feature?.label ?? feature ?? '').toLowerCase();
+  return FEATURE_GROUPS.find(group => group.match.test(clean)) || FEATURE_GROUPS[FEATURE_GROUPS.length - 1];
+}
+
+function describeFeature(label) {
+  const clean = String(label || '').toLowerCase();
+  const found = FEATURE_HINTS.find(([rx]) => rx.test(clean));
+  return found ? found[1] : 'Top-level country attribute from the tokenized infobox.';
+}
+
+function prettyFeatureLabel(label) {
+  return String(label || '').replace(/_/g, ' ');
+}
+
+function featureGroupIdsForLabels(labels) {
+  const wanted = new Set(labels || []);
+  return new Set(
+    ALL_FEATURES
+      .filter(feature => wanted.has(feature.label))
+      .map(feature => getFeatureGroup(feature).id)
+  );
+}
+
+function scrollFeatureGroupIntoView(groupId) {
+  if (!groupId) return;
+  requestAnimationFrame(() => {
+    const groupEl = document.querySelector(`#feat-checks .feat-group[data-group="${groupId}"]`);
+    groupEl?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  });
+}
+
+function renderSelectedFeaturePanel(selected) {
+  const selectedItems = ALL_FEATURES
+    .filter(feature => selected.has(feature.label))
+    .sort((a, b) => prettyFeatureLabel(a.label).localeCompare(prettyFeatureLabel(b.label)));
+
+  if (!selectedItems.length) return '';
+
+  return `
+    <div class="selected-feature-panel">
+      <div class="selected-feature-head">
+        <strong>Selected features</strong>
+        <span class="feat-count">${selectedItems.length}</span>
+        <button type="button" data-clear-selected-top>Clear selected</button>
+      </div>
+      <div class="selected-feature-chips">
+        ${selectedItems.map(({ label }) => {
+          const display = prettyFeatureLabel(label);
+          return `<button type="button" class="selected-feature-chip" data-remove-selected="${label}" title="Remove ${display}">
+            <span class="chip-label">${display}</span>
+            <span class="chip-remove">x</span>
+          </button>`;
+        }).join('')}
+      </div>
+    </div>`;
+}
+
 function renderAttrOptions(query = '', forcedSelected = null) {
   const container = document.getElementById('feat-checks');
   if (!container) return;
 
-  const selected = forcedSelected
-    ? new Set(forcedSelected)
-    : new Set([...document.querySelectorAll('.feat-attr-cb:checked')].map(cb => cb.value));
+  if (forcedSelected) SELECTED_FEATURES = new Set(forcedSelected);
+  const selected = new Set(SELECTED_FEATURES);
 
   const q = String(query || '').trim().toLowerCase();
-  const visibleBase = !q
+  let visibleBase = !q
     ? ALL_FEATURES
     : ALL_FEATURES.filter(f => f.label.replace(/_/g, ' ').toLowerCase().includes(q));
+  if (SHOW_SELECTED_FEATURES_ONLY) {
+    visibleBase = visibleBase.filter(f => selected.has(f.label));
+  }
 
   // UX: keep selected attributes (e.g., preset picks) pinned first,
   // so users immediately see what got selected.
@@ -2444,30 +2943,120 @@ function renderAttrOptions(query = '', forcedSelected = null) {
     return 0;
   });
 
+  const selectedPanel = renderSelectedFeaturePanel(selected);
   if (!visible.length) {
-    container.innerHTML = '<div class="feat-empty">No features match your search.</div>';
+    container.innerHTML = selectedPanel + (SHOW_SELECTED_FEATURES_ONLY
+      ? '<div class="feat-empty">No selected features match the current search.</div>'
+      : '<div class="feat-empty">No features match your search.</div>');
+    bindSelectedFeaturePanel(container);
     return;
   }
 
-  container.innerHTML = visible.map(({ label, count }) =>
-    `<div class="feat-item">
-      <div class="form-check">
-        <input class="form-check-input feat-attr-cb" type="checkbox" id="attr-${label}" value="${label}" ${selected.has(label) ? 'checked' : ''}>
-        <label class="form-check-label feat-label" for="attr-${label}" title="${label.replace(/_/g, ' ')}">
-          ${label.replace(/_/g, ' ')}
-        </label>
-      </div>
-      <span class="feat-count" title="Countries containing this feature">${count}</span>
-    </div>`
-  ).join('');
+  const grouped = new Map(FEATURE_GROUPS.map(group => [group.id, []]));
+  visible.forEach(feature => grouped.get(getFeatureGroup(feature).id).push(feature));
 
+  container.innerHTML = selectedPanel + FEATURE_GROUPS
+    .map(group => {
+      const items = grouped.get(group.id) || [];
+      if (!items.length) return '';
+      const checkedInGroup = items.filter(f => selected.has(f.label)).length;
+      const openAttr = q || SHOW_SELECTED_FEATURES_ONLY || EXPANDED_FEATURE_GROUPS.has(group.id) ? ' open' : '';
+      return `
+        <details class="feat-group" data-group="${group.id}"${openAttr}>
+          <summary class="feat-group-head">
+            <div>
+              <span class="feat-group-title">${group.title} <span class="text-muted">(${items.length})</span></span>
+              <span class="feat-group-desc">${group.desc}</span>
+            </div>
+            <div class="feat-group-actions">
+              <span class="feat-count" title="Selected in this group">${checkedInGroup}/${items.length}</span>
+              <button type="button" data-feat-group-select="${group.id}">Select</button>
+              <button type="button" data-feat-group-clear="${group.id}">Clear</button>
+            </div>
+          </summary>
+          <div class="feat-group-body">
+            ${items.map(({ label, count }) => {
+              const display = prettyFeatureLabel(label);
+              return `<div class="feat-item">
+                <div class="form-check">
+                  <input class="form-check-input feat-attr-cb" type="checkbox" id="attr-${label}" value="${label}" data-group="${group.id}" ${selected.has(label) ? 'checked' : ''}>
+                  <label class="form-check-label feat-label" for="attr-${label}" title="${display}">
+                    ${display}
+                    <span class="feat-meta">${describeFeature(label)}</span>
+                  </label>
+                </div>
+                <span class="feat-count" title="Countries containing this feature">${count}</span>
+              </div>`;
+            }).join('')}
+          </div>
+        </details>`;
+    })
+    .join('');
+
+  bindSelectedFeaturePanel(container);
+  container.querySelectorAll('.feat-group').forEach(groupEl => {
+    groupEl.addEventListener('toggle', () => {
+      if (groupEl.open) EXPANDED_FEATURE_GROUPS.add(groupEl.dataset.group);
+      else EXPANDED_FEATURE_GROUPS.delete(groupEl.dataset.group);
+    });
+  });
   container.querySelectorAll('.feat-attr-cb').forEach(cb =>
-    cb.addEventListener('change', updateFeatSummary)
+    cb.addEventListener('change', () => {
+      if (cb.checked) SELECTED_FEATURES.add(cb.value);
+      else SELECTED_FEATURES.delete(cb.value);
+      EXPANDED_FEATURE_GROUPS.add(cb.dataset.group);
+      updateFeatSummary();
+      renderAttrOptions(document.getElementById('feat-search')?.value || '');
+    })
   );
+  container.querySelectorAll('[data-feat-group-select]').forEach(btn => {
+    btn.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      visible
+        .filter(feature => getFeatureGroup(feature).id === btn.dataset.featGroupSelect)
+        .forEach(feature => SELECTED_FEATURES.add(feature.label));
+      EXPANDED_FEATURE_GROUPS.add(btn.dataset.featGroupSelect);
+      updateFeatSummary();
+      renderAttrOptions(document.getElementById('feat-search')?.value || '');
+      scrollFeatureGroupIntoView(btn.dataset.featGroupSelect);
+    });
+  });
+  container.querySelectorAll('[data-feat-group-clear]').forEach(btn => {
+    btn.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      visible
+        .filter(feature => getFeatureGroup(feature).id === btn.dataset.featGroupClear)
+        .forEach(feature => SELECTED_FEATURES.delete(feature.label));
+      EXPANDED_FEATURE_GROUPS.add(btn.dataset.featGroupClear);
+      updateFeatSummary();
+      renderAttrOptions(document.getElementById('feat-search')?.value || '');
+      scrollFeatureGroupIntoView(btn.dataset.featGroupClear);
+    });
+  });
+}
+
+function bindSelectedFeaturePanel(container) {
+  container.querySelectorAll('[data-remove-selected]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      SELECTED_FEATURES.delete(btn.dataset.removeSelected);
+      updateFeatSummary();
+      renderAttrOptions(document.getElementById('feat-search')?.value || '');
+    });
+  });
+  const clearBtn = container.querySelector('[data-clear-selected-top]');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      SELECTED_FEATURES.clear();
+      updateFeatSummary();
+      renderAttrOptions(document.getElementById('feat-search')?.value || '');
+    });
+  }
 }
 
 function updateFeatSummary() {
-  const checked = [...document.querySelectorAll('.feat-attr-cb:checked')];
+  const checked = [...SELECTED_FEATURES];
   document.getElementById('feat-compute-btn').disabled = checked.length === 0;
   // Attribute selection changed: selected-feature matrix is now stale.
   featureMatrixReady = false;
@@ -2478,7 +3067,7 @@ function updateFeatSummary() {
   }
   const label = `${checked.length} attribute${checked.length > 1 ? 's' : ''} selected`;
   if (TREES_TOK.length > 0) {
-    const sel = new Set(checked.map(cb => cb.value));
+    const sel = new Set(checked);
     const cov = TREES_TOK.filter(t => (t.children || []).some(c => sel.has(nodeLabel(c)))).length;
     document.getElementById('feat-summary').textContent = `${label} — ${cov}/${N} countries have data`;
   } else {
@@ -2491,10 +3080,12 @@ function updateRunButtonState() {
   const globalRun = document.getElementById('run-btn');
   const featRun   = document.getElementById('feat-run-btn');
   const hint      = document.getElementById('feat-run-hint');
+  const globalRunWrap = globalRun?.closest('.col-auto');
 
   if (mode === 'selected') {
     const allowed = featureMatrixReady;
-    if (globalRun) globalRun.disabled = !allowed;
+    if (globalRunWrap) globalRunWrap.classList.add('d-none');
+    if (globalRun) globalRun.disabled = true;
     if (featRun) {
       featRun.disabled = !allowed;
       featRun.classList.toggle('d-none', false);
@@ -2507,6 +3098,7 @@ function updateRunButtonState() {
       hint.classList.toggle('text-muted', !allowed);
     }
   } else {
+    if (globalRunWrap) globalRunWrap.classList.remove('d-none');
     if (globalRun) globalRun.disabled = false;
     if (featRun) featRun.classList.add('d-none');
     if (hint) {
@@ -2595,6 +3187,25 @@ bindIfExists('matrix-overlay', 'click', (e) => {
   if (e.target.id === 'matrix-overlay') closeMatrixOverlay();
 });
 bindIfExists('cluster-country-search', 'input', updateCountryClusterLookup);
+bindIfExists('feat-expand-all', 'click', () => {
+  EXPANDED_FEATURE_GROUPS = new Set(FEATURE_GROUPS.map(group => group.id));
+  document.querySelectorAll('#feat-checks .feat-group').forEach(group => { group.open = true; });
+});
+bindIfExists('feat-collapse-all', 'click', () => {
+  EXPANDED_FEATURE_GROUPS = new Set();
+  document.querySelectorAll('#feat-checks .feat-group').forEach(group => { group.open = false; });
+});
+bindIfExists('feat-selected-only', 'click', (ev) => {
+  SHOW_SELECTED_FEATURES_ONLY = !SHOW_SELECTED_FEATURES_ONLY;
+  ev.currentTarget.classList.toggle('active', SHOW_SELECTED_FEATURES_ONLY);
+  ev.currentTarget.textContent = SHOW_SELECTED_FEATURES_ONLY ? 'Show All' : 'Selected Only';
+  renderAttrOptions(document.getElementById('feat-search')?.value || '');
+});
+bindIfExists('feat-fullscreen', 'click', () => {
+  const picker = document.getElementById('feat-picker');
+  if (!document.fullscreenElement) picker?.requestFullscreen?.();
+  else document.exitFullscreen?.();
+});
 
 // Feature mode toggle
 document.querySelectorAll('input[name="feat-mode"]').forEach(r =>
@@ -2623,24 +3234,22 @@ document.querySelectorAll('input[name="feat-mode"]').forEach(r =>
 );
 
 document.getElementById('feat-all-btn').addEventListener('click', () => {
-  ALL_FEATURES.forEach(({ label }) => {
-    const el = document.getElementById(`attr-${label}`);
-    if (el) el.checked = true;
-  });
-  document.querySelectorAll('.feat-attr-cb').forEach(cb => { cb.checked = true; });
+  SELECTED_FEATURES = new Set(ALL_FEATURES.map(({ label }) => label));
+  renderAttrOptions(document.getElementById('feat-search')?.value || '');
   updateFeatSummary();
 });
 
 document.getElementById('feat-none-btn').addEventListener('click', () => {
-  document.querySelectorAll('.feat-attr-cb').forEach(cb => { cb.checked = false; });
+  SELECTED_FEATURES = new Set();
+  renderAttrOptions(document.getElementById('feat-search')?.value || '');
   updateFeatSummary();
 });
 
 document.getElementById('feat-compute-btn').addEventListener('click', async () => {
   await ensureTreesLoaded();
-  const checked = [...document.querySelectorAll('.feat-attr-cb:checked')];
+  const checked = [...SELECTED_FEATURES];
   if (!checked.length) return;
-  const selectedSet = new Set(checked.map(cb => cb.value));
+  const selectedSet = new Set(checked);
 
   const btn  = document.getElementById('feat-compute-btn');
   const sp   = document.getElementById('feat-spinner');
