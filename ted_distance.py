@@ -43,9 +43,22 @@ def load_tree(path: Path):
 
 
 def sort_tree(node: dict) -> dict:
-    """Sort children alphabetically by label at every level for canonical ordering."""
-    children = sorted(node.get("children", []), key=lambda c: node_label(c))
-    return {**node, "children": [sort_tree(c) for c in children]}
+    """
+    Canonicalize structure order while preserving value-leaf order.
+
+    Rule:
+    - sort only non-leaf children by label (structural keys/attributes)
+    - keep leaf children (values/tokens) in their original source order
+    """
+    original_children = node.get("children", [])
+    structural_sorted = sorted(
+        (c for c in original_children if not is_leaf(c)),
+        key=lambda c: node_label(c),
+    )
+    structural_iter = iter(structural_sorted)
+
+    merged = [child if is_leaf(child) else next(structural_iter) for child in original_children]
+    return {**node, "children": [sort_tree(c) for c in merged]}
 
 
 def node_label(node: dict) -> str:

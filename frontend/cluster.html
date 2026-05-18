@@ -158,6 +158,7 @@
               Clusters &nbsp;<span class="badge bg-primary" id="k-badge">5</span>
             </label>
             <input type="range" class="form-range" id="k-slider" min="2" max="10" value="5">
+            <input type="number" class="form-control form-control-sm mt-1" id="k-input" min="2" max="10" value="5" style="width:90px;" aria-label="Number of clusters">
           </div>
 
           <!-- K-Medoids params -->
@@ -861,6 +862,12 @@ async function loadData() {
   MATRIX        = data.matrix;
   N             = COUNTRIES.length;
   ACTIVE_MATRIX = MATRIX;
+  const kSlider = document.getElementById('k-slider');
+  const kInput  = document.getElementById('k-input');
+  const maxK    = Math.max(2, N);
+  if (kSlider) kSlider.max = String(maxK);
+  if (kInput)  kInput.max  = String(maxK);
+  syncKControls(kInput?.value || kSlider?.value || 5, true);
   populateCountrySearchList();
 
   // Try loading cached MDS coords from DB — skip recomputing if available
@@ -915,6 +922,26 @@ function showClusterBootError(err) {
 // Yield to the browser so the loading message updates
 function tick() {
   return new Promise(r => setTimeout(r, 0));
+}
+
+function clampK(v) {
+  const slider = document.getElementById('k-slider');
+  const minK = +(slider?.min || 2);
+  const maxK = +(slider?.max || Math.max(2, N || 2));
+  const n = Math.round(Number(v));
+  if (!Number.isFinite(n)) return minK;
+  return Math.max(minK, Math.min(maxK, n));
+}
+
+function syncKControls(v, writeInput = true) {
+  const k = clampK(v);
+  const slider = document.getElementById('k-slider');
+  const input  = document.getElementById('k-input');
+  const badge  = document.getElementById('k-badge');
+  if (slider) slider.value = String(k);
+  if (writeInput && input) input.value = String(k);
+  if (badge) badge.textContent = String(k);
+  return k;
 }
 
 // ─── Distance helper ──────────────────────────────────────────────────────────
@@ -2368,18 +2395,27 @@ function buildAttrPicker() {
   });
 }
 
-function renderAttrOptions(query = '') {
+function renderAttrOptions(query = '', forcedSelected = null) {
   const container = document.getElementById('feat-checks');
   if (!container) return;
 
-  const selected = new Set(
-    [...document.querySelectorAll('.feat-attr-cb:checked')].map(cb => cb.value)
-  );
+  const selected = forcedSelected
+    ? new Set(forcedSelected)
+    : new Set([...document.querySelectorAll('.feat-attr-cb:checked')].map(cb => cb.value));
 
   const q = String(query || '').trim().toLowerCase();
-  const visible = !q
+  const visibleBase = !q
     ? ALL_FEATURES
     : ALL_FEATURES.filter(f => f.label.replace(/_/g, ' ').toLowerCase().includes(q));
+
+  // UX: keep selected attributes (e.g., preset picks) pinned first,
+  // so users immediately see what got selected.
+  const visible = [...visibleBase].sort((a, b) => {
+    const aSel = selected.has(a.label) ? 1 : 0;
+    const bSel = selected.has(b.label) ? 1 : 0;
+    if (aSel !== bSel) return bSel - aSel;
+    return 0;
+  });
 
   if (!visible.length) {
     container.innerHTML = '<div class="feat-empty">No features match your search.</div>';
@@ -2441,7 +2477,15 @@ async function computeFeatureMatrix(selectedSet) {
 
 // ─── UI wiring ────────────────────────────────────────────────────────────────
 document.getElementById('k-slider').addEventListener('input', function () {
-  document.getElementById('k-badge').textContent = this.value;
+  syncKControls(this.value, true);
+});
+
+bindIfExists('k-input', 'input', function () {
+  syncKControls(this.value, false);
+});
+
+bindIfExists('k-input', 'change', function () {
+  syncKControls(this.value, true);
 });
 
 document.querySelectorAll('input[name="algo"]').forEach(r =>

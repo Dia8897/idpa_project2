@@ -1252,8 +1252,11 @@ function makeTedContext(sourceTree, targetTree) {
 }
 
 function sortTree(node) {
-  const sorted = (node.children || []).slice().sort((a, b) => nodeLabel(a).localeCompare(nodeLabel(b)));
-  return { ...node, children: sorted.map(sortTree) };
+  const children = (node.children || []).slice();
+  const structural = children.filter((c) => !isLeaf(c)).sort((a, b) => nodeLabel(a).localeCompare(nodeLabel(b)));
+  const structuralIter = structural[Symbol.iterator]();
+  const merged = children.map((child) => (isLeaf(child) ? child : structuralIter.next().value));
+  return { ...node, children: merged.map(sortTree) };
 }
 
 function computeTedMetrics(tree1, tree2) {
