@@ -3052,9 +3052,21 @@ function renderAttrOptions(query = '', forcedSelected = null) {
   const selected = new Set(SELECTED_FEATURES);
 
   const q = String(query || '').trim().toLowerCase();
+  const normalizeFeatureSearchLabel = (label) => String(label || '').replace(/_/g, ' ').toLowerCase();
+  const searchRank = (label) => {
+    if (!q) return 0;
+    const n = normalizeFeatureSearchLabel(label);
+    if (n === q) return 0;            // exact match first
+    if (n.startsWith(q)) return 1;    // then prefix matches
+    const wordPrefix = ` ${q}`;
+    if (n.includes(wordPrefix)) return 2; // word-boundary-ish match
+    if (n.includes(q)) return 3;      // then generic substring
+    return 99;
+  };
+
   let visibleBase = !q
     ? ALL_FEATURES
-    : ALL_FEATURES.filter(f => f.label.replace(/_/g, ' ').toLowerCase().includes(q));
+    : ALL_FEATURES.filter(f => searchRank(f.label) < 99);
   if (SHOW_SELECTED_FEATURES_ONLY) {
     visibleBase = visibleBase.filter(f => selected.has(f.label));
   }
@@ -3065,7 +3077,13 @@ function renderAttrOptions(query = '', forcedSelected = null) {
     const aSel = selected.has(a.label) ? 1 : 0;
     const bSel = selected.has(b.label) ? 1 : 0;
     if (aSel !== bSel) return bSel - aSel;
-    return 0;
+    if (q) {
+      const ra = searchRank(a.label);
+      const rb = searchRank(b.label);
+      if (ra !== rb) return ra - rb;
+    }
+    if (a.count !== b.count) return b.count - a.count;
+    return a.label.localeCompare(b.label);
   });
 
   const selectedPanel = renderSelectedFeaturePanel(selected);
@@ -3080,7 +3098,21 @@ function renderAttrOptions(query = '', forcedSelected = null) {
   const grouped = new Map(FEATURE_GROUPS.map(group => [group.id, []]));
   visible.forEach(feature => grouped.get(getFeatureGroup(feature).id).push(feature));
 
-  container.innerHTML = selectedPanel + FEATURE_GROUPS
+  const orderedGroups = q
+    ? [...FEATURE_GROUPS].sort((ga, gb) => {
+        const aItems = grouped.get(ga.id) || [];
+        const bItems = grouped.get(gb.id) || [];
+        const aBest = aItems.length ? Math.min(...aItems.map(item => searchRank(item.label))) : Infinity;
+        const bBest = bItems.length ? Math.min(...bItems.map(item => searchRank(item.label))) : Infinity;
+        if (aBest !== bBest) return aBest - bBest;
+        const aTop = aItems.length ? aItems[0].count : -1;
+        const bTop = bItems.length ? bItems[0].count : -1;
+        if (aTop !== bTop) return bTop - aTop;
+        return ga.title.localeCompare(gb.title);
+      })
+    : FEATURE_GROUPS;
+
+  container.innerHTML = selectedPanel + orderedGroups
     .map(group => {
       const items = grouped.get(group.id) || [];
       if (!items.length) return '';
